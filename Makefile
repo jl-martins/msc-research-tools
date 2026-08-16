@@ -10,7 +10,7 @@ sysconfdir = $(prefix)/etc
 binmod := 0755
 sysconfmod := 0644
 
-sh_tools := dacapo-min-heap dacapo-run
+sh_tools := dacapo-min-heap jbench-run
 uv_tools := dacapo-stats format-comparisons
 tools := $(sh_tools) $(uv_tools)
 
@@ -65,11 +65,11 @@ dacapo-min-heap: | $(bindir)
 	@install -m $(binmod) "$@/$@.sh" "$(bindir)/$@"
 	$(log_done)
 
-dacapo-run: | $(bindir) $(sysconfdir)
+jbench-run: | $(bindir) $(sysconfdir)
 	$(log_start) "Installing $@"
 	@install -m $(binmod) "$@/$@.sh" "$(bindir)/$@"
-	@install -d "$(sysconfdir)/$@"
-	@install -m $(sysconfmod) "$@"/config/* "$(sysconfdir)/$@/"
+	@cp -R "$@/config/." "$(sysconfdir)/$@/"
+	@find "$(sysconfdir)/$@/" -type f -exec chmod $(sysconfmod) {} +
 	$(log_done)
 
 $(uv_tools):
@@ -89,10 +89,10 @@ uninstall-dacapo-min-heap:
 	@rm -f $(bindir)/dacapo-min-heap
 	$(log_done)
 
-uninstall-dacapo-run:
-	$(log_start) "Uninstalling dacapo-run"
-	@rm -f "$(bindir)/dacapo-run"
-	@rm -rf "$(sysconfdir)/dacapo-run"
+uninstall-jbench-run:
+	$(log_start) "Uninstalling jbench-run"
+	@rm -f "$(bindir)/jbench-run"
+	@rm -rf "$(sysconfdir)/jbench-run"
 	$(log_done)
 
 $(addprefix uninstall-,$(uv_tools)): uninstall-%:
