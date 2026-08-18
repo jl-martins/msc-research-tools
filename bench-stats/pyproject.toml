@@ -1,7 +1,7 @@
 [project]
-name = "dacapo-stats"
+name = "bench-stats"
 version = "0.1.0"
-description = "Generate DaCapo benchmark statistics for Master's Thesis"
+description = "Generate benchmark statistics for Master's Dissertation"
 requires-python = ">=3.14"
 dependencies = [
     "matplotlib~=3.10.3",
@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-dacapo-stats = "dacapo_stats:main"
+bench-stats = "bench_stats:main"
 
 [tool.uv]
 package = true

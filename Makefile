@@ -11,7 +11,7 @@ binmod := 0755
 sysconfmod := 0644
 
 sh_tools := dacapo-min-heap jbench-run
-uv_tools := dacapo-stats format-comparisons
+uv_tools := bench-stats format-comparisons
 tools := $(sh_tools) $(uv_tools)
 
 uninstall_targets := $(addprefix uninstall-,$(tools))

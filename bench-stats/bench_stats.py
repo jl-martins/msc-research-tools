@@ -142,7 +142,7 @@ def setup_logging(root_dir: Path, verbose: bool = False) -> None:
     root_logger.addHandler(console_handler)
 
     # File Handler
-    log_file = root_dir / "dacapo-stats.log"
+    log_file = root_dir / "bench-stats.log"
     file_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
     file_handler.setFormatter(file_formatter)
@@ -586,7 +586,7 @@ def generate_stats(root_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate DaCapo benchmark statistics for Master's Thesis",
+        description="Generate benchmark statistics for Master's Dissertation",
         color=False,
     )
     parser.add_argument(
