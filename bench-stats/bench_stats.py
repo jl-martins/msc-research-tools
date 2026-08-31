@@ -441,7 +441,7 @@ def compare_metric(
     cliffs_d = float(cliffs_delta(x, y, u))
     cliffs_d_ci = two_sample_bootstrap_ci(x, y, cliffs_delta)
 
-    significant = p_val <= ALPHA
+    significant = bool(p_val <= ALPHA)
     if significant:
         logger.info(
             "%s/%s: significant difference detected (p=%.4g, Cliff's Delta=%.3f)",
