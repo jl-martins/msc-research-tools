@@ -32,6 +32,7 @@ METRICS_SCHEMA = {
     "Core": pl.Float64,
     "Uncore": pl.Float64,
     "DRAM": pl.Float64,
+    "PackageAndDRAM": pl.Float64,
     "Time": pl.Float64,
     "Temperature": pl.Float64,
     "Memory": pl.Float64,
@@ -48,12 +49,17 @@ MEASUREMENTS_SCHEMA = {
     **METRICS_SCHEMA,
 }
 
+RAW_MEASUREMENTS_SCHEMA = {
+    k: v for k, v in MEASUREMENTS_SCHEMA.items() if k != "PackageAndDRAM"
+}
+
 # Summary Statistics
 SUMMARY_STATS = ["Median", "IQR", "Count"]
 
 # Columns
 METRICS = list(METRICS_SCHEMA.keys())
 IDENTITY_COLUMNS = list(IDENTITY_COLUMNS_SCHEMA.keys())
+MEASUREMENTS_COLUMNS = list(MEASUREMENTS_SCHEMA.keys())
 
 SUMMARY_COLUMNS = IDENTITY_COLUMNS + [
     f"{metric}_{stat}" for metric, stat in itertools.product(METRICS, SUMMARY_STATS)
@@ -155,10 +161,31 @@ def is_non_baseline_dir(path: Path) -> bool:
     return path.is_dir() and path.name != BASELINE_DIR_NAME
 
 
+def normalize_measurements_columns(measurements_path: Path) -> None:
+    """Add the derived `PackageAndDRAM` column if missing and sort columns per `MEASUREMENTS_SCHEMA`"""
+    columns = pl.scan_csv(measurements_path).collect_schema().names()
+    if columns == MEASUREMENTS_COLUMNS:
+        return
+
+    schema = (
+        MEASUREMENTS_SCHEMA if "PackageAndDRAM" in columns else RAW_MEASUREMENTS_SCHEMA
+    )
+    df = pl.read_csv(measurements_path, schema=schema)
+    if "PackageAndDRAM" not in df.columns:
+        df = df.with_columns(
+            (pl.col("Package") + pl.col("DRAM")).alias("PackageAndDRAM")
+        )
+
+    tmp_path = measurements_path.with_name(f"{measurements_path.name}.tmp")
+    df.select(MEASUREMENTS_COLUMNS).write_csv(tmp_path)
+    tmp_path.replace(measurements_path)
+
+
 @functools.lru_cache(maxsize=256)
 def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:
     """Load raw measurements, clean them and return the result as a data frame"""
     try:
+        normalize_measurements_columns(measurements_path)
         df = pl.read_csv(measurements_path, schema=MEASUREMENTS_SCHEMA)
         active_runs_df = df.filter(~pl.col("Program").str.starts_with(IDLE_RUN_PREFIX))
         if active_runs_df.is_empty():
