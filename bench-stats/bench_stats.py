@@ -366,7 +366,7 @@ def two_sample_bootstrap_ci(
                 n_resamples=n_resamples,
                 confidence_level=1 - ALPHA,
                 method=PRIMARY_BOOTSTRAP_METHOD,
-                random_state=RNG,
+                rng=RNG,
             )
         except DegenerateDataWarning:
             logger.info(
