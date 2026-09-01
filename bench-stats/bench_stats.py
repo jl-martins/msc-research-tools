@@ -496,7 +496,7 @@ def compare_baseline_and_variant(
     """Compare all common benchmarks between a baseline and variant directory"""
     baseline_bms = {d.name for d in baseline_dir.iterdir() if d.is_dir()}
     variant_bms = {d.name for d in variant_dir.iterdir() if d.is_dir()}
-    common_bms = baseline_bms.intersection(variant_bms)
+    common_bms = sorted(baseline_bms.intersection(variant_bms))
     missing_in_baseline = variant_bms - baseline_bms
     missing_in_variant = baseline_bms - variant_bms
     if missing_in_baseline:
