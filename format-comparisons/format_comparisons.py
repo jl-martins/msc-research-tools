@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 COMPARISON_FILE_NAME = "comparison.csv"
 
 # Pattern Fills
-POS_FILL = PatternFill(start_color="E2F0D9", end_color="E2F0D9", fill_type="solid")
-NEG_FILL = PatternFill(start_color="FCE5E5", end_color="FCE5E5", fill_type="solid")
+POS_FILL = PatternFill(start_color="FCE5E5", end_color="FCE5E5", fill_type="solid")
+NEG_FILL = PatternFill(start_color="E2F0D9", end_color="E2F0D9", fill_type="solid")
 NEUTRAL_FILL = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
 
 

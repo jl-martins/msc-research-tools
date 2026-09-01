@@ -437,9 +437,11 @@ def compare_metric(
     med_diff_pct_ci = two_sample_bootstrap_ci(x, y, median_difference_percent)
     iqr_x, iqr_y = iqr(x), iqr(y)
 
-    u, p_val = mannwhitneyu(x, y, alternative="two-sided")
-    cliffs_d = float(cliffs_delta(x, y, u))
-    cliffs_d_ci = two_sample_bootstrap_ci(x, y, cliffs_delta)
+    # Pass the variant as the first sample so that the sign of Cliff's delta
+    # indicates the direction of the difference between variant and baseline.
+    u, p_val = mannwhitneyu(y, x, alternative="two-sided")
+    cliffs_d = float(cliffs_delta(y, x, u))
+    cliffs_d_ci = two_sample_bootstrap_ci(y, x, cliffs_delta)
 
     significant = bool(p_val <= ALPHA)
     if significant:
