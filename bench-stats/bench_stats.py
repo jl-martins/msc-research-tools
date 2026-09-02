@@ -15,27 +15,56 @@ import itertools
 import logging
 import warnings
 from collections import namedtuple
+from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict
+from typing import Any, Literal, NamedTuple, Protocol, TypedDict
 
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import polars as pl
+from inflection import underscore
 from scipy.stats import DegenerateDataWarning, bootstrap, iqr, mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 
 logger = logging.getLogger(__name__)
 
+
+# Metrics
+class Metric(StrEnum):
+    """A measured quantity, named exactly as its column in `METRICS_SCHEMA`"""
+
+    PACKAGE = "Package"
+    CORE = "Core"
+    UNCORE = "Uncore"
+    DRAM = "DRAM"
+    PACKAGE_AND_DRAM = "PackageAndDRAM"
+    TIME = "Time"
+    TEMPERATURE = "Temperature"
+    MEMORY = "Memory"
+
+
+# Human-readable names for the metrics that get plotted.
+# Omitted metric keys default to their value from the `Metric` enum.
+METRIC_LABELS: dict[Metric, str] = {
+    Metric.PACKAGE_AND_DRAM: "Energy",
+}
+
+
 # Schemas
 METRICS_SCHEMA = {
-    "Package": pl.Float64,
-    "Core": pl.Float64,
-    "Uncore": pl.Float64,
-    "DRAM": pl.Float64,
-    "PackageAndDRAM": pl.Float64,
-    "Time": pl.Float64,
-    "Temperature": pl.Float64,
-    "Memory": pl.Float64,
+    Metric.PACKAGE: pl.Float64,
+    Metric.CORE: pl.Float64,
+    Metric.UNCORE: pl.Float64,
+    Metric.DRAM: pl.Float64,
+    Metric.PACKAGE_AND_DRAM: pl.Float64,
+    Metric.TIME: pl.Float64,
+    Metric.TEMPERATURE: pl.Float64,
+    Metric.MEMORY: pl.Float64,
 }
 
 IDENTITY_COLUMNS_SCHEMA = {
@@ -50,7 +79,7 @@ MEASUREMENTS_SCHEMA = {
 }
 
 RAW_MEASUREMENTS_SCHEMA = {
-    k: v for k, v in MEASUREMENTS_SCHEMA.items() if k != "PackageAndDRAM"
+    k: v for k, v in MEASUREMENTS_SCHEMA.items() if k != Metric.PACKAGE_AND_DRAM
 }
 
 # Summary Statistics
@@ -92,11 +121,87 @@ RNG = np.random.default_rng(seed=42)
 # Numeric types
 type IntOrFloat = np.integer | np.floating
 
-# Effect sizes
+# Effect size classes from Romano et al., 2006
 type EffectSizeClass = Literal["negligible", "small", "medium", "large"]
+
+
+# Supported effect size measures
+class EffectSize(StrEnum):
+    """An effect size, named exactly as its column in `ComparisonRow`."""
+
+    MEDIAN_DIFFERENCE_PERCENT = "Median_Difference_Percent"
+    CLIFFS_DELTA = "Cliffs_Delta"
+
 
 # Confidence interval named tuple
 ConfidenceInterval = namedtuple("ConfidenceInterval", ["low", "high"])
+
+# Confidence level (%) corresponding to `ALPHA`, for display purposes
+CI_LEVEL_PERCENT = round((1 - ALPHA) * 100)
+
+# DPI for plots in PNG format
+PLOT_DPI = 300
+
+
+# Forest plot configurations
+
+# Canonical column names of effect size columns so that the rendering
+# logic of Forest plots is independent of the effect size measure.
+FOREST_PLOT_ESTIMATE_COLUMN = "Estimate"
+FOREST_PLOT_CI_LOW_COLUMN = "Estimate_CI_Low"
+FOREST_PLOT_CI_HIGH_COLUMN = "Estimate_CI_High"
+
+# Columns that must be finite for a benchmark to have a plottable position in a forest plot
+FOREST_PLOT_FINITE_COLUMNS = (
+    FOREST_PLOT_ESTIMATE_COLUMN,
+    FOREST_PLOT_CI_LOW_COLUMN,
+    FOREST_PLOT_CI_HIGH_COLUMN,
+)
+
+# Right edge of the numeric column, in Axes fractions of the right-hand panel
+FOREST_PLOT_VALUE_COLUMN_EDGE = 0.98
+
+# Y coordinate of the header row of a forest plot.
+# Benchmarks are listed from y=0 to positive values of y,
+# so the header row must have a negative y coordinate.
+FOREST_PLOT_HEADER_Y = -1.0
+
+# Forest plot colors and fonts
+FOREST_PLOT_MARKER_COLOR = "#4C72B0"
+FOREST_PLOT_HEADER_FONT: dict[str, Any] = {"weight": "bold", "size": 10}
+FOREST_PLOT_VALUE_FONT: dict[str, Any] = {"family": "monospace", "size": 9}
+
+
+class EffectSizeStyle(NamedTuple):
+    """How to label and format an effect size measure on a forest plot"""
+
+    xlabel: str
+    column_header: str
+    # Format specification for both the estimate and the CI bounds.
+    value_format: str
+    # Optional fixed x-limits, for effect sizes with a bounded range
+    limits: tuple[float, float] | None = None
+
+
+FOREST_PLOT_EFFECT_SIZE_STYLES: dict[EffectSize, EffectSizeStyle] = {
+    EffectSize.MEDIAN_DIFFERENCE_PERCENT: EffectSizeStyle(
+        xlabel="Median Difference (%)",
+        column_header="Diff (%)",
+        value_format="z6.1f",
+    ),
+    EffectSize.CLIFFS_DELTA: EffectSizeStyle(
+        xlabel="Cliff's Delta",
+        column_header="Delta",
+        value_format="z6.3f",
+        limits=(-1.05, 1.05),
+    ),
+}
+
+
+# Which forest plots to render for every variant directory
+FOREST_PLOTS: tuple[tuple[Metric, EffectSize], ...] = (
+    (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
+)
 
 
 class TwoSampleStatistic(Protocol):
@@ -560,10 +665,178 @@ def generate_comparisons(root_dir: Path) -> None:
 
         for variant_dir in filter(is_non_baseline_dir, jdk_dir.iterdir()):
             result_df = compare_baseline_and_variant(baseline_dir, variant_dir)
-            if result_df is not None:
-                comparison_path = variant_dir / COMPARISON_FILE_NAME
-                result_df.write_csv(comparison_path)
-                logger.info("Created statistical comparison '%s'", comparison_path)
+            if result_df is None:
+                continue
+
+            comparison_path = variant_dir / COMPARISON_FILE_NAME
+            result_df.write_csv(comparison_path)
+            logger.info("Created statistical comparison '%s'", comparison_path)
+
+            for metric, effect_size in FOREST_PLOTS:
+                generate_forest_plot(jdk_dir, variant_dir, result_df, metric, effect_size)  # fmt: skip
+
+
+# Forest Plots
+def prepare_forest_plot_data(
+    comparison_df: pl.DataFrame,
+    metric: Metric,
+    effect_size: EffectSize,
+) -> pl.DataFrame:
+    """Prepare a data frame for a forest plot"""
+    metric_df = comparison_df.filter(pl.col("Metric") == metric).select(
+        "Program",
+        pl.col(effect_size).alias(FOREST_PLOT_ESTIMATE_COLUMN),
+        pl.col(f"{effect_size}_CI_Low").alias(FOREST_PLOT_CI_LOW_COLUMN),
+        pl.col(f"{effect_size}_CI_High").alias(FOREST_PLOT_CI_HIGH_COLUMN),
+    )
+
+    # Filter out rows that cannot be plotted
+    plottable = pl.all_horizontal(
+        pl.col(FOREST_PLOT_FINITE_COLUMNS).is_finite().fill_null(False)
+    )
+
+    dropped = metric_df.filter(~plottable).get_column("Program").to_list()
+    if dropped:
+        logger.warning(
+            "Excluding %d benchmark(s) from the %s/%s forest plot due "
+            "to non-finite estimate(s) or CI bound(s): %s",
+            len(dropped), metric, effect_size, sorted(dropped),
+        )  # fmt: skip
+
+    return metric_df.filter(plottable).sort("Program")
+
+
+def draw_forest_plot_graph(
+    ax: plt.Axes,
+    plot_df: pl.DataFrame,
+    style: EffectSizeStyle,
+    title: str,
+) -> None:
+    """Draw the graphical area of a forest plot"""
+    programs = plot_df.get_column("Program").to_list()
+    estimates = plot_df.get_column(FOREST_PLOT_ESTIMATE_COLUMN).to_numpy()
+    ci_low = plot_df.get_column(FOREST_PLOT_CI_LOW_COLUMN).to_numpy()
+    ci_high = plot_df.get_column(FOREST_PLOT_CI_HIGH_COLUMN).to_numpy()
+
+    y = np.arange(len(programs))
+    x_err = np.vstack([estimates - ci_low, ci_high - estimates])
+
+    ax.axvline(0, color="gray", linestyle="--", linewidth=1, zorder=1)
+    ax.errorbar(
+        estimates, y,
+        xerr=x_err, fmt="o",
+        color=FOREST_PLOT_MARKER_COLOR,
+        elinewidth=1.5, capsize=3,
+        markersize=5, zorder=2,
+    )  # fmt: skip
+
+    ax.set_xlabel(style.xlabel)
+    if style.limits is not None:
+        ax.set_xlim(style.limits)
+
+    ax.set_yticks(y)
+    ax.set_ylabel("Benchmark")
+    ax.set_yticklabels(programs)
+
+    ax.set_title(title)
+
+
+def draw_forest_plot_table(
+    ax: plt.Axes,
+    plot_df: pl.DataFrame,
+    style: EffectSizeStyle,
+) -> None:
+    """Draw the estimate and its interval as one right-aligned monospaced column"""
+    ax.axis("off")
+
+    # `get_yaxis_transform` blends Axes-fraction x with data-space y, so each row
+    # sits at exactly the height of its whisker on the left panel and the column
+    # edge stays put regardless of how wide the panel ends up.
+    transform = ax.get_yaxis_transform()
+
+    def draw_row(y: float, row_text: str, font: dict[str, Any]) -> None:
+        ax.text(
+            FOREST_PLOT_VALUE_COLUMN_EDGE, y, row_text,
+            transform=transform, ha="right", va="center", **font,
+        )  # fmt: skip
+
+    draw_row(
+        FOREST_PLOT_HEADER_Y,
+        f"{style.column_header} [{CI_LEVEL_PERCENT}% CI]",
+        FOREST_PLOT_HEADER_FONT,
+    )
+
+    fmt = style.value_format
+    for i, row in enumerate(plot_df.iter_rows(named=True)):
+        estimate = row[FOREST_PLOT_ESTIMATE_COLUMN]
+        ci_low = row[FOREST_PLOT_CI_LOW_COLUMN]
+        ci_high = row[FOREST_PLOT_CI_HIGH_COLUMN]
+        text = f"{estimate:{fmt}} [{ci_low:{fmt}}, {ci_high:{fmt}}]"
+        draw_row(float(i), text, FOREST_PLOT_VALUE_FONT)
+
+
+def render_forest_plot(
+    plot_df: pl.DataFrame,
+    effect_size: EffectSize,
+    title: str,
+) -> plt.Figure:
+    """Render a forest plot of `plot_df` with boostrap CI whiskers"""
+    style = FOREST_PLOT_EFFECT_SIZE_STYLES[effect_size]
+    n = plot_df.height
+
+    fig, (ax, ax_labels) = plt.subplots(
+        1, 2,
+        figsize=(10, max(2.0, 0.35 * (n + 1) + 1.0)),
+        gridspec_kw={"width_ratios": [3, 1.3]},
+        sharey=True,
+    )  # fmt: skip
+
+    # Zebra striping, spanning both subplots so a row stays traceable from its
+    # benchmark label all the way to its row in the right-hand side table.
+    for axes in (ax, ax_labels):
+        for yi in range(0, n, 2):
+            axes.axhspan(yi - 0.5, yi + 0.5, color="black", alpha=0.04, zorder=0)
+
+    draw_forest_plot_graph(ax, plot_df, style, title)
+    draw_forest_plot_table(ax_labels, plot_df, style)
+
+    # Set last, and on one Axes only: `sharey` propagates it, and it has to
+    # survive the autoscaling that the panels' own drawing would otherwise trigger
+    ax.set_ylim(n - 0.5, FOREST_PLOT_HEADER_Y - 0.5)
+
+    fig.tight_layout()
+    return fig
+
+
+def generate_forest_plot(
+    jdk_dir: Path,
+    variant_dir: Path,
+    comparison_df: pl.DataFrame,
+    metric: Metric,
+    effect_size: EffectSize,
+) -> None:
+    """Generate a forest plot for the specified variant directory, metric and effect size"""
+    metric_label = METRIC_LABELS.get(metric, str(metric))
+    title = f"{jdk_dir.name} / {variant_dir.name} — {metric_label}"
+
+    plot_df = prepare_forest_plot_data(comparison_df, metric, effect_size)
+    if plot_df.is_empty():
+        logger.warning(
+            "No plottable %s comparisons found for '%s'; skipping %s forest plot",
+            metric, variant_dir, effect_size,
+        )  # fmt: skip
+        return
+
+    fig = render_forest_plot(plot_df, effect_size, title)
+    try:
+        stem = f"{underscore(metric_label)}_{underscore(effect_size)}_forest_plot"
+        pgf_path = variant_dir / f"{stem}.pgf"
+        png_path = variant_dir / f"{stem}.png"
+        fig.savefig(pgf_path, format="pgf", backend="pgf")
+        fig.savefig(png_path, dpi=PLOT_DPI)
+        logger.info("Created forest plots '%s' and '%s'", pgf_path, png_path)
+    finally:
+        plt.close(fig)
 
 
 # Orchestration

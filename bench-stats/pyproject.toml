@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Generate benchmark statistics for Master's Dissertation"
 requires-python = ">=3.14"
 dependencies = [
+    "inflection~=0.5.1",
     "matplotlib~=3.10.3",
     "numpy~=2.4.6",
     "polars~=1.41.2",
