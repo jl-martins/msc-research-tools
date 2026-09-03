@@ -886,6 +886,22 @@ def generate_stats(root_dir: Path) -> None:
     )
 
 
+def run(root_dir: Path) -> None:
+    """Process every scenario subdirectory of `root_dir`"""
+    if not root_dir.exists():
+        logger.error("Root directory '%s' does not exist", root_dir)
+        return
+
+    scenario_dirs = sorted(d for d in root_dir.iterdir() if d.is_dir())
+    logger.info(
+        "Processing %d scenario director%s: %s",
+        len(scenario_dirs), "y" if len(scenario_dirs) == 1 else "ies",
+        [d.name for d in scenario_dirs],
+    )  # fmt: skip
+    for scenario_dir in scenario_dirs:
+        generate_stats(scenario_dir)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate benchmark statistics for Master's Dissertation",
@@ -909,7 +925,7 @@ def main() -> None:
     setup_logging(root_dir, args.verbose)
 
     logger.info("Using root directory '%s'", root_dir)
-    generate_stats(root_dir)
+    run(root_dir)
 
 
 if __name__ == "__main__":

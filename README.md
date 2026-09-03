@@ -126,7 +126,7 @@ uv tool uninstall <tool_name>
 
 ## Usage Examples
 
-```sh
+```bash
 # 1. Set the Java installation root. This is the directory where `jbench-run`
 #    and `dacapo-min-heap` will search for JDKs. This example uses the default
 #    installation root managed by mise (https://github.com/jdx/mise).
@@ -178,38 +178,50 @@ done
 sudoedit /usr/local/etc/jbench-run/dacapo/23.11-MR2-chopin-jlm-config.sh
 
 # 5.2. Run the selected implementations of the benchmark suite across the selected
-#      JDKs. Each benchmark will run with 2 times the minimum heap size configured
-#      in point 5.1 and will use the specified garbage collector options. jbench-run
-#      will invoke each benchmark 20 times per JDK and implementation (--invocations 20);
-#      each invocation runs in a new Java process. All invocations will pass "-n 5" to
-#      the DaCapo benchmark harness (--suite-additional-opts "-n 5") to run 5 iterations
-#      in the same JVM (4 warm-up iterations followed by a measurement iteration).
+#      JDKs, once per execution scenario. Each benchmark will run with 2 times the
+#      minimum heap size configured in point 5.1 and will use the specified garbage
+#      collector options. jbench-run will invoke each benchmark 20 times per JDK and
+#      implementation (--invocations 20); each invocation runs in a new Java process.
+#
+#      The "cold" scenario passes "-n 1" to the DaCapo benchmark harness to run a
+#      single measurement iteration per Java process, whereas the "warm" scenario
+#      passes "-n 5" to run 5 iterations in the same JVM (4 warm-up iterations
+#      followed by a measurement iteration).
+#
+#      The results of each scenario are written to a dedicated output directory at
+#      "$jbench_run_base_out_dir/<scenario>".
 #
 #      jbench-run must run as root to measure energy consumption with RAPL, so
 #      JAVA_INSTALL_ROOT is passed explicitly to survive the environment reset
 #      performed by sudo.
-jbench_run_out_dir="$HOME/jbench-run-results/$suite_name-$suite_version"
-sudo JAVA_INSTALL_ROOT="$JAVA_INSTALL_ROOT" jbench-run \
-    --jdks "$jdks" \
-    --gc-opts "$gc_opts" \
-    --heap-multiplier 2 \
-    --artifact-dir "$artifact_dir" \
-    --suite-name "$suite_name" \
-    --suite-version "$suite_version" \
-    --suite-additional-opts "-n 5" \
-    --implementations "$implementations" \
-    --invocations 20 \
-    --out-dir "$jbench_run_out_dir"
+jbench_run_base_out_dir="$HOME/jbench-run-results/$suite_name/$suite_version"
+declare -A scenario_to_suite_options=(
+    [cold]="-n 1"
+    [warm]="-n 5"
+)
+for scenario in "${!scenario_to_suite_options[@]}"; do
+  sudo JAVA_INSTALL_ROOT="$JAVA_INSTALL_ROOT" jbench-run \
+      --jdks "$jdks" \
+      --gc-opts "$gc_opts" \
+      --heap-multiplier 2 \
+      --artifact-dir "$artifact_dir" \
+      --suite-name "$suite_name" \
+      --suite-version "$suite_version" \
+      --suite-additional-opts "${scenario_to_suite_options[$scenario]}" \
+      --implementations "$implementations" \
+      --invocations 20 \
+      --out-dir "$jbench_run_base_out_dir/$scenario"
+done
 
 # 5.3. Take ownership of the results, which were created by root, so that the
 #      remaining steps can write their outputs to the same directory tree.
-sudo chown -R "$USER" "$jbench_run_out_dir"
+sudo chown -R "$USER" "$jbench_run_base_out_dir"
 
 # 6. Generate benchmark statistics
-bench-stats "$jbench_run_out_dir"
+bench-stats "$jbench_run_base_out_dir"
 
 # 7. Format the comparisons from bench-stats into a styled Excel workbook
-format-comparisons "$jbench_run_out_dir"
+format-comparisons "$jbench_run_base_out_dir"
 ```
 
 ## Command-Line Reference
