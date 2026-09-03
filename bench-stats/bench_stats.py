@@ -13,6 +13,7 @@ import argparse
 import functools
 import itertools
 import logging
+import re
 import warnings
 from collections import namedtuple
 from enum import StrEnum
@@ -27,6 +28,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import polars as pl
+from matplotlib.colors import Normalize, SymLogNorm
+from matplotlib.ticker import FuncFormatter, SymmetricalLogLocator
 from inflection import underscore
 from scipy.stats import DegenerateDataWarning, bootstrap, iqr, mannwhitneyu
 from statsmodels.stats.multitest import multipletests
@@ -53,6 +56,11 @@ class Metric(StrEnum):
 METRIC_LABELS: dict[Metric, str] = {
     Metric.PACKAGE_AND_DRAM: "Energy",
 }
+
+
+def get_metric_label(metric: Metric) -> str:
+    """Return the human-readable label for `metric`"""
+    return METRIC_LABELS.get(metric, str(metric))
 
 
 # Schemas
@@ -101,6 +109,7 @@ IDLE_RUN_PREFIX = "idle_"
 MEASUREMENTS_FILE_NAME = "measurements.csv"
 SUMMARY_FILE_NAME = "summary.csv"
 COMPARISON_FILE_NAME = "comparison.csv"
+JAVA_VERSION_FILE_NAME = "java_version.txt"
 BASELINE_DIR_NAME = "loops"
 
 # Significance level for statistical hypothesis testing
@@ -158,8 +167,8 @@ FOREST_PLOT_FINITE_COLUMNS = (
     FOREST_PLOT_CI_HIGH_COLUMN,
 )
 
-# Right edge of the numeric column, in Axes fractions of the right-hand panel
-FOREST_PLOT_VALUE_COLUMN_EDGE = 0.98
+# Horizontal center of the numeric column, in Axes fractions of the right-hand panel
+FOREST_PLOT_VALUE_COLUMN_CENTER = 0.5
 
 # Y coordinate of the header row of a forest plot.
 # Benchmarks are listed from y=0 to positive values of y,
@@ -173,26 +182,25 @@ FOREST_PLOT_VALUE_FONT: dict[str, Any] = {"family": "monospace", "size": 9}
 
 
 class EffectSizeStyle(NamedTuple):
-    """How to label and format an effect size measure on a forest plot"""
+    """How to format an effect size measure"""
 
-    xlabel: str
-    column_header: str
-    # Format specification for both the estimate and the CI bounds.
-    value_format: str
-    # Optional fixed x-limits, for effect sizes with a bounded range
+    label: str
+    # Decimal places for both the estimate and the CI bounds.
+    precision: int
+    # Fixed column width used only by the forest plot's monospace, right-aligned value table.
+    plot_column_width: int = 6
+    # Optional fixed axis limits, for effect sizes with a bounded range
     limits: tuple[float, float] | None = None
 
 
-FOREST_PLOT_EFFECT_SIZE_STYLES: dict[EffectSize, EffectSizeStyle] = {
+EFFECT_SIZE_STYLES: dict[EffectSize, EffectSizeStyle] = {
     EffectSize.MEDIAN_DIFFERENCE_PERCENT: EffectSizeStyle(
-        xlabel="Median Difference (%)",
-        column_header="Diff (%)",
-        value_format="z6.1f",
+        label="Relative median change (%)",
+        precision=1,
     ),
     EffectSize.CLIFFS_DELTA: EffectSizeStyle(
-        xlabel="Cliff's Delta",
-        column_header="Delta",
-        value_format="z6.3f",
+        label="Cliff's δ",
+        precision=3,
         limits=(-1.05, 1.05),
     ),
 }
@@ -202,6 +210,67 @@ FOREST_PLOT_EFFECT_SIZE_STYLES: dict[EffectSize, EffectSizeStyle] = {
 FOREST_PLOTS: tuple[tuple[Metric, EffectSize], ...] = (
     (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
 )
+
+
+# Heatmap configurations
+
+# ColorBrewer's RdBu, reversed so that red encodes an increase and blue a decrease.
+# RdBu is a colorblind-safe diverging palette that ranges from a saturated blue,
+# through a neutral light gray/white, to a deep, saturated red.
+HEATMAP_COLORMAP = "RdBu_r"
+
+# Color of cells without a finite estimate or confidence interval
+HEATMAP_MISSING_COLOR = "#DDDDDD"
+
+# Effect sizes without a bounded range are colored on a symmetric logarithmic
+# scale, linear within +/- this threshold and logarithmic beyond it. Relative
+# median changes span orders of magnitude, so a linear scale would flatten the
+# many small effects into an indistinguishable near-white block.
+HEATMAP_LINEAR_THRESHOLD = 10.0
+
+# Size of a single heatmap cell and of the margins reserved for
+# the axis labels, the title and the colorbar, all in inches.
+HEATMAP_CELL_WIDTH_INCHES = 1.5
+HEATMAP_CELL_HEIGHT_INCHES = 0.55
+HEATMAP_HORIZONTAL_MARGIN_INCHES = 2.5
+HEATMAP_VERTICAL_MARGIN_INCHES = 1.5
+
+# Heatmap cell annotation font
+HEATMAP_CELL_FONT: dict[str, Any] = {"family": "monospace", "size": 7}
+
+# Distance from the middle of the color scale beyond which a cell is
+# dark enough to need light text. The colors of light and dark text are
+# defined by HEATMAP_DARK_CELL_TEXT_COLOR and HEATMAP_LIGHT_CELL_TEXT_COLOR.
+HEATMAP_DARK_CELL_THRESHOLD = 0.35
+HEATMAP_DARK_CELL_TEXT_COLOR = "white"
+HEATMAP_LIGHT_CELL_TEXT_COLOR = "black"
+
+# Which heatmaps to render for every scenario
+HEATMAPS: tuple[tuple[Metric, EffectSize], ...] = (
+    (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
+)
+
+
+# JDK versions
+
+# The version string of a JDK, as reported by `java -version`, is the first
+# quoted token of `JAVA_VERSION_FILE_NAME` (e.g. openjdk version "25.0.3").
+JAVA_VERSION_STRING_PATTERN = re.compile(r'version\s+"([^"]+)"')
+
+# `(major, minor, security)` of a legacy (pre-JEP 223) version number, whose
+# form is "1.$MAJOR.$MINOR_$UPDATE" (e.g. "1.8.0_492"). $UPDATE maps onto
+# $SECURITY, as in the version data that Adoptium publishes for the JDKs
+# used here (e.g. "1.8.0_504-b01" is major 8, minor 0, security 504).
+JAVA_LEGACY_VERSION_NUMBER_PATTERN = re.compile(r"^1\.(\d+)(?:\.(\d+))?(?:_(\d+))?")
+
+# `(major, minor, security)` of `$VNUM`, the leading version number of a
+# JEP 223 version string (e.g. "25.0.3" of "25.0.3+9-LTS"). `$VNUM` omits
+# trailing zero elements, so it may be shorter (e.g. "21" is JDK 21.0.0),
+# and any fourth or later element is reserved for downstream consumers.
+JAVA_VERSION_NUMBER_PATTERN = re.compile(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?")
+
+# A `(major, minor, security)` version number, as defined by JEP 223
+type JdkVersion = tuple[int, int, int]
 
 
 class TwoSampleStatistic(Protocol):
@@ -258,6 +327,63 @@ def setup_logging(root_dir: Path, verbose: bool = False) -> None:
     file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
     file_handler.setFormatter(file_formatter)
     root_logger.addHandler(file_handler)
+
+
+# JDK Versions
+def parse_jdk_version(java_version_output: str) -> JdkVersion | None:
+    """Parse the `(major, minor, security)` version of a `java -version` output, or `None` if absent"""
+    version_string_match = JAVA_VERSION_STRING_PATTERN.search(java_version_output)
+    if version_string_match is None:
+        return None
+
+    version_string = version_string_match.group(1)
+    version_patterns = (JAVA_VERSION_NUMBER_PATTERN, JAVA_LEGACY_VERSION_NUMBER_PATTERN)
+    version_number_match = next(
+        (match for p in version_patterns if (match := p.match(version_string))),
+        None,
+    )
+    if version_number_match is None:
+        return None
+
+    major, minor, security = version_number_match.groups()
+    return int(major), int(minor or 0), int(security or 0)
+
+
+def read_jdk_version(jdk_dir: Path) -> JdkVersion | None:
+    """Read the version of the JDK in `jdk_dir`, or `None` if it cannot be determined"""
+    java_version_path = jdk_dir / JAVA_VERSION_FILE_NAME
+    try:
+        version = parse_jdk_version(java_version_path.read_text(encoding="utf-8"))
+    except OSError:
+        logger.exception("Error when reading '%s'", java_version_path)
+        return None
+
+    if version is None:
+        logger.warning("Could not parse JDK version from '%s'", java_version_path)
+
+    return version
+
+
+def collect_jdk_versions(scenario_dirs: list[Path]) -> dict[str, JdkVersion]:
+    """Map the name of every JDK directory to the version of the JDK it holds"""
+    versions: dict[str, JdkVersion] = {}
+    for scenario_dir in scenario_dirs:
+        for jdk_dir in filter(Path.is_dir, scenario_dir.iterdir()):
+            if jdk_dir.name in versions:
+                continue
+
+            version = read_jdk_version(jdk_dir)
+            if version is not None:
+                versions[jdk_dir.name] = version
+
+    return versions
+
+
+def sort_jdks(jdks: list[str], versions: dict[str, JdkVersion]) -> list[str]:
+    """Sort JDK names by version, listing JDKs of unknown version last, in name order"""
+    return sorted(
+        jdks, key=lambda jdk: (jdk not in versions, versions.get(jdk, ()), jdk)
+    )
 
 
 # I/O
@@ -676,6 +802,258 @@ def generate_comparisons(root_dir: Path) -> None:
                 generate_forest_plot(jdk_dir, variant_dir, result_df, metric, effect_size)  # fmt: skip
 
 
+# Cross-Scenario Overview Statistics
+def collect_comparison_data(scenario_dirs: list[Path]) -> pl.DataFrame:
+    """Concatenate all comparison CSVs and tag them with Scenario and JDK columns"""
+    frames = []
+    for scenario_dir in scenario_dirs:
+        for jdk_dir in filter(Path.is_dir, scenario_dir.iterdir()):
+            for variant_dir in filter(is_non_baseline_dir, jdk_dir.iterdir()):
+                comparison_path = variant_dir / COMPARISON_FILE_NAME
+                if not comparison_path.exists():
+                    logger.warning("Missing '%s'; skipping", comparison_path)
+                    continue
+
+                df = pl.read_csv(comparison_path).with_columns(
+                    Scenario=pl.lit(scenario_dir.name),
+                    JDK=pl.lit(jdk_dir.name),
+                )
+                frames.append(df)
+
+    if not frames:
+        logger.error(
+            "No comparison data found across %s",
+            [d.name for d in scenario_dirs],
+        )
+        return pl.DataFrame()
+
+    return pl.concat(frames, how="vertical")
+
+
+def generate_overall_stats(root_dir: Path, scenario_dirs: list[Path]) -> None:
+    """Generate overview statistics (per-scenario effect size heatmaps)"""
+    comparison_data = collect_comparison_data(scenario_dirs)
+    if comparison_data.is_empty():
+        return
+
+    jdk_versions = collect_jdk_versions(scenario_dirs)
+    for metric, effect_size in HEATMAPS:
+        # Built from every scenario, so that all the heatmaps of a
+        # metric share a color scale and stay comparable with each other
+        norm = build_effect_size_norm(comparison_data, metric, effect_size)
+        if norm is None:
+            logger.warning(
+                "No %s comparisons found; skipping the %s heatmaps",
+                metric, effect_size,
+            )  # fmt: skip
+            continue
+
+        for scenario in sorted(comparison_data.get_column("Scenario").unique()):
+            scenario_df = comparison_data.filter(pl.col("Scenario") == scenario)
+            generate_effect_size_heatmaps(
+                root_dir / scenario, scenario, scenario_df,
+                metric, effect_size, norm, jdk_versions,
+            )  # fmt: skip
+
+
+# Effect Size Heatmaps
+def format_estimate_with_ci(
+    estimate: float,
+    ci_low: float,
+    ci_high: float,
+    style: EffectSizeStyle,
+) -> str:
+    """Format an effect size as "E\\n[L, H]" (or "" if some value is not finite)"""
+    if any(not np.isfinite(v) for v in (estimate, ci_low, ci_high)):
+        return ""
+
+    fmt = f"+z.{style.precision}f"
+    return f"{estimate:{fmt}}\n[{ci_low:{fmt}}, {ci_high:{fmt}}]"
+
+
+class HeatmapData(NamedTuple):
+    """The benchmarks, JDKs, effect sizes and cell annotations of one heatmap"""
+
+    benchmarks: list[str]
+    jdks: list[str]
+    # Effect size estimates, as a (benchmark, JDK) matrix whose
+    # cells without anything to plot are left masked
+    estimates: np.ma.MaskedArray
+    # Cell annotations, in the same shape as `estimates`
+    annotations: npt.NDArray[np.object_]
+
+
+def prepare_heatmap_data(
+    comparison_data: pl.DataFrame,
+    metric: Metric,
+    effect_size: EffectSize,
+    jdk_versions: dict[str, JdkVersion],
+) -> dict[str, HeatmapData]:
+    """Prepare the data of an effect size heatmap of a metric, for each variant"""
+    style = EFFECT_SIZE_STYLES[effect_size]
+    metric_df = comparison_data.filter(pl.col("Metric") == metric)
+
+    heatmaps: dict[str, HeatmapData] = {}
+    for variant in sorted(metric_df.get_column("Variant").unique()):
+        variant_df = metric_df.filter(pl.col("Variant") == variant)
+        benchmarks = sorted(variant_df.get_column("Program").unique())
+        jdks = sort_jdks(variant_df.get_column("JDK").unique().to_list(), jdk_versions)
+        rows = {benchmark: i for i, benchmark in enumerate(benchmarks)}
+        columns = {jdk: j for j, jdk in enumerate(jdks)}
+
+        estimates = np.ma.masked_all((len(benchmarks), len(jdks)))
+        annotations = np.full(estimates.shape, "", dtype=np.object_)
+        for row in variant_df.iter_rows(named=True):
+            # A cell whose effect size or interval could not be estimated has
+            # no annotation, and is left masked so that it is drawn as missing
+            annotation = format_estimate_with_ci(
+                row[effect_size],
+                row[f"{effect_size}_CI_Low"],
+                row[f"{effect_size}_CI_High"],
+                style,
+            )
+            if not annotation:
+                continue
+
+            i, j = rows[row["Program"]], columns[row["JDK"]]
+            estimates[i, j] = row[effect_size]
+            annotations[i, j] = annotation
+
+        heatmaps[variant] = HeatmapData(benchmarks, jdks, estimates, annotations)
+
+    return heatmaps
+
+
+def build_effect_size_norm(
+    comparison_data: pl.DataFrame,
+    metric: Metric,
+    effect_size: EffectSize,
+) -> Normalize | None:
+    """Build the color scale of an effect size, centered at zero, or `None` if there is nothing to scale"""
+    style = EFFECT_SIZE_STYLES[effect_size]
+    limits = style.limits
+    if limits is not None:
+        return Normalize(limits[0], limits[1])
+
+    estimates = (
+        comparison_data.filter(pl.col("Metric") == metric)
+        .get_column(effect_size)
+        .to_numpy()
+    )
+    estimates = estimates[np.isfinite(estimates)]
+    if estimates.size == 0:
+        return None
+
+    limit = float(np.abs(estimates).max())
+    return SymLogNorm(HEATMAP_LINEAR_THRESHOLD, vmin=-limit, vmax=limit)
+
+
+def draw_heatmap_annotations(
+    ax: plt.Axes,
+    data: HeatmapData,
+    norm: Normalize,
+) -> None:
+    """Draw the estimate and its interval on every cell of a heatmap"""
+    for (i, j), annotation in np.ndenumerate(data.annotations):
+        if not annotation:
+            continue
+
+        # Cells near either end of the color scale are dark, so light text
+        # is the readable choice; the pale cells in the middle need dark text
+        shade = abs(float(norm(data.estimates[i, j])) - 0.5)
+        color = (
+            HEATMAP_DARK_CELL_TEXT_COLOR
+            if shade > HEATMAP_DARK_CELL_THRESHOLD
+            else HEATMAP_LIGHT_CELL_TEXT_COLOR
+        )
+        # The mesh spans the cell boundaries, so a cell is centered
+        # half a cell past the coordinates of its lower left corner
+        ax.text(
+            j + 0.5, i + 0.5, annotation,
+            color=color, ha="center", va="center", **HEATMAP_CELL_FONT,
+        )  # fmt: skip
+
+
+def render_effect_size_heatmap(
+    data: HeatmapData,
+    effect_size: EffectSize,
+    norm: Normalize,
+    title: str,
+) -> plt.Figure:
+    """Render a heatmap of the effect sizes in `data`, annotated with their bootstrap CIs"""
+    style = EFFECT_SIZE_STYLES[effect_size]
+    rows, columns = data.estimates.shape
+
+    fig, ax = plt.subplots(
+        figsize=(
+            columns * HEATMAP_CELL_WIDTH_INCHES + HEATMAP_HORIZONTAL_MARGIN_INCHES,
+            rows * HEATMAP_CELL_HEIGHT_INCHES + HEATMAP_VERTICAL_MARGIN_INCHES,
+        )
+    )
+
+    # Drawn as a mesh so that the PGF output is vector graphics instead of rasterized PNGs.
+    colormap = plt.get_cmap(HEATMAP_COLORMAP).with_extremes(bad=HEATMAP_MISSING_COLOR)
+    mesh = ax.pcolormesh(data.estimates, cmap=colormap, norm=norm)
+    draw_heatmap_annotations(ax, data, norm)
+
+    # A mesh spans the cell boundaries, so its ticks (unlike an image's) sit
+    # on them, and its rows are laid out upwards. Both need correcting for
+    # the benchmarks to read alphabetically from the top of a labeled grid.
+    ax.set_xticks(np.arange(columns) + 0.5, labels=data.jdks)
+    ax.set_xlabel("JDK")
+    ax.set_yticks(np.arange(rows) + 0.5, labels=data.benchmarks)
+    ax.set_ylabel("Benchmark")
+    ax.invert_yaxis()
+    ax.set_title(title)
+
+    colorbar = fig.colorbar(mesh, ax=ax)
+    assert colorbar.solids is not None
+    colorbar.solids.set_rasterized(False)
+
+    label = style.label
+    if isinstance(norm, SymLogNorm):
+        colorbar.ax.yaxis.set_major_locator(
+            SymmetricalLogLocator(linthresh=HEATMAP_LINEAR_THRESHOLD, base=10)
+        )
+
+        # Ensure ticks are read in the same terms as the cells, not in scientific notation
+        colorbar.ax.yaxis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))  # fmt: skip
+
+        # Make it clear that the chart uses a symlog scale
+        label += f"\n(logarithmic beyond ±{HEATMAP_LINEAR_THRESHOLD:g})"
+
+    colorbar.set_label(label)
+    fig.tight_layout()
+    return fig
+
+
+def generate_effect_size_heatmaps(
+    output_dir: Path,
+    scenario: str,
+    comparison_data: pl.DataFrame,
+    metric: Metric,
+    effect_size: EffectSize,
+    norm: Normalize,
+    jdk_versions: dict[str, JdkVersion],
+) -> None:
+    """Generate an effect size heatmap of the specified metric for each variant of a scenario"""
+    metric_label = get_metric_label(metric)
+    heatmaps = prepare_heatmap_data(comparison_data, metric, effect_size, jdk_versions)
+
+    for variant, data in heatmaps.items():
+        title = f"{scenario} / {variant} — {metric_label}"
+        fig = render_effect_size_heatmap(data, effect_size, norm, title)
+        try:
+            stem = f"{variant}_{underscore(metric_label)}_{underscore(effect_size)}_heatmap"  # fmt: skip
+            pgf_path = output_dir / f"{stem}.pgf"
+            png_path = output_dir / f"{stem}.png"
+            fig.savefig(pgf_path, format="pgf", backend="pgf")
+            fig.savefig(png_path, dpi=PLOT_DPI)
+            logger.info("Created heatmaps '%s' and '%s'", pgf_path, png_path)
+        finally:
+            plt.close(fig)
+
+
 # Forest Plots
 def prepare_forest_plot_data(
     comparison_df: pl.DataFrame,
@@ -730,7 +1108,7 @@ def draw_forest_plot_graph(
         markersize=5, zorder=2,
     )  # fmt: skip
 
-    ax.set_xlabel(style.xlabel)
+    ax.set_xlabel(style.label)
     if style.limits is not None:
         ax.set_xlim(style.limits)
 
@@ -746,27 +1124,30 @@ def draw_forest_plot_table(
     plot_df: pl.DataFrame,
     style: EffectSizeStyle,
 ) -> None:
-    """Draw the estimate and its interval as one right-aligned monospaced column"""
+    """Draw the estimate and its interval as one centered monospaced column"""
     ax.axis("off")
 
     # `get_yaxis_transform` blends Axes-fraction x with data-space y, so each row
     # sits at exactly the height of its whisker on the left panel and the column
-    # edge stays put regardless of how wide the panel ends up.
+    # center stays put regardless of how wide the panel ends up. Every data row
+    # renders to the same fixed width (via `style.plot_column_width`), so the
+    # numeric rows stay aligned as a block; centering (rather than right-aligning)
+    # also keeps the shorter header row visually centered above them.
     transform = ax.get_yaxis_transform()
 
     def draw_row(y: float, row_text: str, font: dict[str, Any]) -> None:
         ax.text(
-            FOREST_PLOT_VALUE_COLUMN_EDGE, y, row_text,
-            transform=transform, ha="right", va="center", **font,
+            FOREST_PLOT_VALUE_COLUMN_CENTER, y, row_text,
+            transform=transform, ha="center", va="center", **font,
         )  # fmt: skip
 
     draw_row(
         FOREST_PLOT_HEADER_Y,
-        f"{style.column_header} [{CI_LEVEL_PERCENT}% CI]",
+        f"Estimate [{CI_LEVEL_PERCENT}% CI]",
         FOREST_PLOT_HEADER_FONT,
     )
 
-    fmt = style.value_format
+    fmt = f"+z{style.plot_column_width}.{style.precision}f"
     for i, row in enumerate(plot_df.iter_rows(named=True)):
         estimate = row[FOREST_PLOT_ESTIMATE_COLUMN]
         ci_low = row[FOREST_PLOT_CI_LOW_COLUMN]
@@ -781,7 +1162,7 @@ def render_forest_plot(
     title: str,
 ) -> plt.Figure:
     """Render a forest plot of `plot_df` with boostrap CI whiskers"""
-    style = FOREST_PLOT_EFFECT_SIZE_STYLES[effect_size]
+    style = EFFECT_SIZE_STYLES[effect_size]
     n = plot_df.height
 
     fig, (ax, ax_labels) = plt.subplots(
@@ -816,7 +1197,7 @@ def generate_forest_plot(
     effect_size: EffectSize,
 ) -> None:
     """Generate a forest plot for the specified variant directory, metric and effect size"""
-    metric_label = METRIC_LABELS.get(metric, str(metric))
+    metric_label = get_metric_label(metric)
     title = f"{jdk_dir.name} / {variant_dir.name} — {metric_label}"
 
     plot_df = prepare_forest_plot_data(comparison_df, metric, effect_size)
@@ -887,7 +1268,7 @@ def generate_stats(root_dir: Path) -> None:
 
 
 def run(root_dir: Path) -> None:
-    """Process every scenario subdirectory of `root_dir`"""
+    """Process every scenario subdirectory of `root_dir` and generate overview statistics"""
     if not root_dir.exists():
         logger.error("Root directory '%s' does not exist", root_dir)
         return
@@ -900,6 +1281,8 @@ def run(root_dir: Path) -> None:
     )  # fmt: skip
     for scenario_dir in scenario_dirs:
         generate_stats(scenario_dir)
+
+    generate_overall_stats(root_dir, scenario_dirs)
 
 
 def main() -> None:
