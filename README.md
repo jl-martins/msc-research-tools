@@ -138,11 +138,16 @@ jdks="temurin-8 temurin-11 temurin-17 temurin-21 temurin-25"
 gc_opts="-XX:+UseG1GC"
 
 # 3. Set the name, version and implementations of the benchmark suite for the
-#    following examples. We will use the loop-based and the stream-based
-#    implementation from https://github.com/jl-martins/msc-dacapobench/tags
+#    following examples, along with the directory that contains the benchmark
+#    suite JARs. We will use the loop-based and the stream-based implementation
+#    from https://github.com/jl-martins/msc-dacapobench/tags
+#
+#    The JAR of every implementation i must be at
+#    "$artifact_dir/$suite_name-$suite_version-$i.jar".
 suite_name="dacapo"
 suite_version="23.11-MR2-chopin-jlm"
 implementations="loops streams"
+artifact_dir="$HOME/benchmark-jars"
 
 # 4. Find the minimum heap size of each benchmark for each selected implementation
 #    and JDK, using the specified garbage collector options. The results will be
@@ -152,7 +157,7 @@ for impl in $implementations; do
   dacapo-min-heap \
       --jdks="$jdks" \
       --gc-opts="$gc_opts" \
-      $suite_name-$suite_version-$impl.jar
+      "$artifact_dir/$suite_name-$suite_version-$impl.jar"
 done
 
 # 5.1. Open the suite configuration file in a text editor and update the `MIN_HEAP`
@@ -170,26 +175,35 @@ done
 #      `jbench-run/config/dacapo/23.11-MR2-chopin-jlm-config.sh`, which use the
 #      RAPLCallback from https://github.com/jl-martins/msc-dacapobench
 #      to measure execution time and energy consumption.
-vim /usr/local/etc/jbench-run/dacapo/23.11-MR2-chopin-jlm-config.sh
+sudoedit /usr/local/etc/jbench-run/dacapo/23.11-MR2-chopin-jlm-config.sh
 
 # 5.2. Run the selected implementations of the benchmark suite across the selected
 #      JDKs. Each benchmark will run with 2 times the minimum heap size configured
 #      in point 5.1 and will use the specified garbage collector options. jbench-run
-#      will invoke each benchmark 20 times per JDK and implementation (--invocation 20);
+#      will invoke each benchmark 20 times per JDK and implementation (--invocations 20);
 #      each invocation runs in a new Java process. All invocations will pass "-n 5" to
 #      the DaCapo benchmark harness (--suite-additional-opts "-n 5") to run 5 iterations
 #      in the same JVM (4 warm-up iterations followed by a measurement iteration).
+#
+#      jbench-run must run as root to measure energy consumption with RAPL, so
+#      JAVA_INSTALL_ROOT is passed explicitly to survive the environment reset
+#      performed by sudo.
 jbench_run_out_dir="$HOME/jbench-run-results/$suite_name-$suite_version"
-sudo jbench-run \
+sudo JAVA_INSTALL_ROOT="$JAVA_INSTALL_ROOT" jbench-run \
     --jdks "$jdks" \
     --gc-opts "$gc_opts" \
     --heap-multiplier 2 \
+    --artifact-dir "$artifact_dir" \
     --suite-name "$suite_name" \
     --suite-version "$suite_version" \
     --suite-additional-opts "-n 5" \
     --implementations "$implementations" \
     --invocations 20 \
     --out-dir "$jbench_run_out_dir"
+
+# 5.3. Take ownership of the results, which were created by root, so that the
+#      remaining steps can write their outputs to the same directory tree.
+sudo chown -R "$USER" "$jbench_run_out_dir"
 
 # 6. Generate benchmark statistics
 bench-stats "$jbench_run_out_dir"
