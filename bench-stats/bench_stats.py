@@ -13,6 +13,7 @@ import argparse
 import functools
 import itertools
 import logging
+import math
 import re
 import warnings
 from collections import namedtuple
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, Protocol, TypedDict
 
 import matplotlib
+from matplotlib.axes import Axes
 
 matplotlib.use("Agg")
 
@@ -28,17 +30,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import polars as pl
+from adjustText import adjust_text
 from inflection import underscore
 from matplotlib.colors import Normalize, SymLogNorm
+from matplotlib.scale import SymmetricalLogTransform
 from matplotlib.ticker import FuncFormatter, SymmetricalLogLocator
 from scipy.stats import (
     DegenerateDataWarning,
     bootstrap,
     iqr,
     mannwhitneyu,
-    pearsonr,
-    permutation_test,
-    rankdata,
     spearmanr,
 )
 from statsmodels.stats.multitest import multipletests
@@ -124,10 +125,6 @@ BASELINE_DIR_NAME = "loops"
 
 # Significance level for statistical hypothesis testing
 ALPHA = 0.05
-
-# Above this many observations, spearmanr's own p-value (a Student's t
-# approximation) is accurate enough that a permutation test is not needed
-SPEARMAN_PERMUTATION_TEST_MAX_N = 500
 
 # Valid methods for computing bootstrap confidence intervals
 type BootstrapMethod = Literal["percentile", "basic", "bca", "BCa"]
@@ -264,6 +261,66 @@ HEATMAPS: tuple[tuple[Metric, EffectSize], ...] = (
     (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
 )
 
+
+# Scatter plot configuration
+
+# Marker color for scatter points
+SCATTER_PLOT_MARKER_COLOR = FOREST_PLOT_MARKER_COLOR
+
+# Fonts for the figure title, panel titles, axis ticks, per-point benchmark labels
+# and per-panel correlation annotation. Matplotlib's defaults are sized for a figure
+# far larger than one of these panels, so all of them are set explicitly.
+SCATTER_PLOT_SUPTITLE_FONT: dict[str, Any] = {"size": 11}
+SCATTER_PLOT_TITLE_FONT: dict[str, Any] = {"size": 9}
+SCATTER_PLOT_TICK_FONT: dict[str, Any] = {"size": 7}
+SCATTER_PLOT_LABEL_FONT: dict[str, Any] = {"size": 6}
+SCATTER_PLOT_STAT_FONT: dict[str, Any] = {"size": 7}
+
+# Headroom left past the data at each end of an axis, as a fraction of the axis'
+# length. It is measured on the scale the axis is drawn on rather than on the data,
+# since a multiple of a value is a vanishing part of an axis spanning many decades.
+SCATTER_PLOT_AXIS_PADDING_FRACTION = 0.06
+
+# Both axes are symmetric logarithmic, since relative changes span orders of
+# magnitude, and linear within +/- this threshold so that they can cross zero. That
+# region is narrow because distances within it read as differences, not as ratios.
+SCATTER_PLOT_LINEAR_THRESHOLD = 1.0
+
+# Width of the linear region, as a multiple of a tenfold step of the logarithmic
+# part. Matplotlib's own default, shared so that the axes and their padding agree.
+SCATTER_PLOT_LINEAR_SCALE = 1.0
+
+# Columns the JDK panels are laid out over. A single row would leave each panel too
+# narrow to hold a labeled point per benchmark, so they wrap over several rows.
+SCATTER_PLOT_COLUMNS = 2
+
+# Size of a single panel and of the margins reserved for the axis labels and the
+# figure title, all in inches. The figure grows with the number of panels. Scaling
+# it to a given page is left to whatever includes it.
+SCATTER_PLOT_PANEL_WIDTH_INCHES = 2.9
+SCATTER_PLOT_PANEL_HEIGHT_INCHES = 2.7
+SCATTER_PLOT_HORIZONTAL_MARGIN_INCHES = 0.5
+SCATTER_PLOT_VERTICAL_MARGIN_INCHES = 1.0
+
+# Reference lines under the points of every panel
+SCATTER_PLOT_ZERO_LINE_STYLE: dict[str, Any] = {
+    "color": "gray",
+    "linestyle": "--",
+    "linewidth": 0.8,
+    "zorder": 1,
+}
+SCATTER_PLOT_IDENTITY_LINE_STYLE: dict[str, Any] = {
+    "color": "gray",
+    "linestyle": ":",
+    "linewidth": 0.8,
+    "zorder": 1,
+}
+
+# Where the correlation annotation sits, in Axes fractions
+SCATTER_PLOT_STAT_POSITION = (0.04, 0.96)
+
+# Names every scenario at once, in the energy-time correlation table
+ENERGY_TIME_CORRELATION_ALL_LABEL = "All"
 
 # JDK versions
 
@@ -845,7 +902,7 @@ def collect_comparison_data(scenario_dirs: list[Path]) -> pl.DataFrame:
 
 
 def build_long_time_and_energy_table(comparison_data: pl.DataFrame) -> pl.DataFrame:
-    """Build a long (Benchmark, JDK, Scenario, Time_Diff_Percent, Energy_Diff_Percent) table"""
+    """Build a long (Benchmark, JDK, Scenario, Variant, Time_Diff_Percent, Energy_Diff_Percent) table"""
     keys = ["Program", "JDK", "Scenario", "Variant"]
     time_df = comparison_data.filter(pl.col("Metric") == Metric.TIME).select(
         *keys, pl.col("Median_Difference_Percent").alias("Time_Diff_Percent")
@@ -854,7 +911,7 @@ def build_long_time_and_energy_table(comparison_data: pl.DataFrame) -> pl.DataFr
         pl.col("Metric") == Metric.PACKAGE_AND_DRAM
     ).select(*keys, pl.col("Median_Difference_Percent").alias("Energy_Diff_Percent"))
 
-    long_df = time_df.join(energy_df, on=keys, how="inner").drop("Variant")
+    long_df = time_df.join(energy_df, on=keys, how="inner")
     finite = (
         pl.col("Time_Diff_Percent").is_finite()
         & pl.col("Energy_Diff_Percent").is_finite()
@@ -862,63 +919,46 @@ def build_long_time_and_energy_table(comparison_data: pl.DataFrame) -> pl.DataFr
     return long_df.filter(finite).rename({"Program": "Benchmark"})
 
 
+def spearman_rho(subset: pl.DataFrame) -> float:
+    """Correlate the time and energy differences of `subset` by Spearman's rank coefficient"""
+    return float(
+        spearmanr(
+            subset.get_column("Time_Diff_Percent").to_numpy(),
+            subset.get_column("Energy_Diff_Percent").to_numpy(),
+        ).statistic
+    )
+
+
 def spearman_row(
-    name: str,
+    variant: str,
+    scenario: str,
     subset: pl.DataFrame,
-    permutation_test_n_resamples: int = 9_999,
 ) -> dict[str, Any]:
-    """Compute one row (N, Spearman's rho, p-value) of the energy-time correlation table"""
-    n = len(subset)
-    time_diff_percent = subset["Time_Diff_Percent"].to_numpy()
-    energy_diff_percent = subset["Energy_Diff_Percent"].to_numpy()
-
-    # spearmanr's own p-value comes from a Student's t approximation that is
-    # only accurate for >500 observations. Below that, build the null
-    # distribution by permutation instead, as scipy's own documentation
-    # recommends: hold one array fixed and permute the other.
-    if n > SPEARMAN_PERMUTATION_TEST_MAX_N:
-        rho, p_value = spearmanr(time_diff_percent, energy_diff_percent)
-    else:
-        # Unlike spearmanr, pearsonr vectorizes over permutations.
-        # Since Spearman's ρ is Pearson's r computed on ranks (as in
-        # https://github.com/scipy/scipy/blob/v1.17.1/scipy/stats/_stats_py.py#L5405-L5406)
-        # and rankdata is equivariant under permutation, we can use rankdata
-        # and pearsonr to vectorize the permutation test.
-        ranked_time_diff_percent = rankdata(time_diff_percent)
-        ranked_energy_diff_percent = rankdata(energy_diff_percent)
-
-        def statistic(
-            permuted_ranked_time_diff_percent: npt.NDArray[np.floating],
-            axis: int,
-        ) -> npt.NDArray[np.floating]:
-            return pearsonr(
-                permuted_ranked_time_diff_percent,
-                ranked_energy_diff_percent,
-                axis=axis,
-            ).statistic
-
-        result = permutation_test(
-            (ranked_time_diff_percent,), statistic,
-            permutation_type="pairings", vectorized=True,
-            n_resamples=permutation_test_n_resamples, rng=RNG,
-        )  # fmt: skip
-        rho, p_value = result.statistic, result.pvalue
-
+    """Compute one row of the energy-time correlation table"""
     return {
-        "Analysis": name,
-        "N": n,
-        "Spearman_Rho": float(rho),
-        "P_Value": float(p_value),
+        "Variant": variant,
+        "Scenario": scenario,
+        "N": len(subset),
+        "Spearman_Rho": spearman_rho(subset),
     }
 
 
 def generate_energy_time_correlation_table(long_df: pl.DataFrame) -> pl.DataFrame:
-    """Compute the Spearman correlation between Time_Diff_Percent and Energy_Diff_Percent, overall and per scenario"""
-    rows = [spearman_row("Overall", long_df)]
-
-    for scenario in sorted(long_df.get_column("Scenario").unique()):
-        subset = long_df.filter(pl.col("Scenario") == scenario)
-        rows.append(spearman_row(scenario.capitalize(), subset))
+    """Compute the Spearman correlation between Time_Diff_Percent and Energy_Diff_Percent, per variant and scenario"""
+    rows = []
+    for variant in sorted(long_df.get_column("Variant").unique()):
+        variant_df = long_df.filter(pl.col("Variant") == variant)
+        rows.append(
+            spearman_row(variant, ENERGY_TIME_CORRELATION_ALL_LABEL, variant_df)
+        )
+        rows += [
+            spearman_row(
+                variant,
+                scenario.capitalize(),
+                variant_df.filter(pl.col("Scenario") == scenario),
+            )
+            for scenario in sorted(variant_df.get_column("Scenario").unique())
+        ]
 
     return pl.DataFrame(rows)
 
@@ -949,10 +989,16 @@ def generate_overall_stats(root_dir: Path, scenario_dirs: list[Path]) -> None:
             )  # fmt: skip
 
     long_df = build_long_time_and_energy_table(comparison_data)
+    if long_df.is_empty():
+        logger.warning("No energy-time data found; skipping energy-time correlation")
+        return
+
     correlation_df = generate_energy_time_correlation_table(long_df)
     correlation_path = root_dir / ENERGY_TIME_CORRELATION_FILE_NAME
     correlation_df.write_csv(correlation_path)
     logger.info("Created energy-time correlation table '%s'", correlation_path)
+
+    generate_energy_time_scatter_plots(root_dir, long_df, jdk_versions)
 
 
 # Effect Size Heatmaps
@@ -1317,6 +1363,168 @@ def generate_forest_plot(
         logger.info("Created forest plots '%s' and '%s'", pgf_path, png_path)
     finally:
         plt.close(fig)
+
+
+# Energy-Time Scatter Plot
+def compute_scatter_panel_limits(
+    *values: npt.NDArray[np.floating],
+    padding: float = SCATTER_PLOT_AXIS_PADDING_FRACTION,
+) -> tuple[float, float]:
+    """Return the `padding`-widened `(min, max)` for a panel of an scatter plot"""
+    # Pad on the drawn scale rather than on the data, so that the headroom is
+    # the same share of an axis however many orders of magnitude it spans.
+    transform = SymmetricalLogTransform(
+        base=10,
+        linthresh=SCATTER_PLOT_LINEAR_THRESHOLD,
+        linscale=SCATTER_PLOT_LINEAR_SCALE,
+    )
+    low, high = transform.transform(
+        [min(float(v.min()) for v in values), max(float(v.max()) for v in values)]
+    )
+    margin = (high - low) * padding
+    low, high = transform.inverted().transform([low - margin, high + margin])
+
+    # Clear zero by the linear region so a zero line never lies flush against a panel edge
+    return (
+        min(float(low), -SCATTER_PLOT_LINEAR_THRESHOLD),
+        max(float(high), SCATTER_PLOT_LINEAR_THRESHOLD),
+    )
+
+
+def render_energy_time_scatter_panel(
+    ax: plt.Axes,
+    panel_df: pl.DataFrame,
+    limits: tuple[float, float],
+) -> list[plt.Text]:
+    """Draw one JDK panel of an energy-time scatter plot, returning its unplaced point labels"""
+    # Set before placing the points: adjust_text spreads labels within the
+    # Axes' current view, so it must already be the final shared view
+    # rather than the tight per-panel default matplotlib would autoscale to
+    scale: dict[str, Any] = {
+        "linthresh": SCATTER_PLOT_LINEAR_THRESHOLD,
+        "linscale": SCATTER_PLOT_LINEAR_SCALE,
+    }
+    ax.set_xscale("symlog", **scale)
+    ax.set_yscale("symlog", **scale)
+    ax.set_xlim(limits)
+    ax.set_ylim(limits)
+
+    ax.axhline(0, **SCATTER_PLOT_ZERO_LINE_STYLE)
+    ax.axvline(0, **SCATTER_PLOT_ZERO_LINE_STYLE)
+    ax.plot(limits, limits, **SCATTER_PLOT_IDENTITY_LINE_STYLE)
+
+    x = panel_df.get_column("Time_Diff_Percent").to_numpy()
+    y = panel_df.get_column("Energy_Diff_Percent").to_numpy()
+    ax.scatter(x, y, color=SCATTER_PLOT_MARKER_COLOR, s=15, zorder=2)
+
+    ax.text(
+        *SCATTER_PLOT_STAT_POSITION,
+        f"$\\rho = {spearman_rho(panel_df):.2f}$\n$n = {len(panel_df)}$",
+        transform=ax.transAxes, ha="left", va="top", **SCATTER_PLOT_STAT_FONT,
+    )  # fmt: skip
+
+    return [
+        ax.text(xi, yi, benchmark, **SCATTER_PLOT_LABEL_FONT)
+        for xi, yi, benchmark in zip(
+            x, y, panel_df.get_column("Benchmark").to_list(), strict=True
+        )
+    ]
+
+
+def render_energy_time_scatter_grid(
+    scenario_df: pl.DataFrame,
+    scenario: str,
+    jdks: list[str],
+    limits: tuple[float, float],
+) -> plt.Figure:
+    """Render one scenario's grid of energy-time scatter panels, one per JDK"""
+    rows = math.ceil(len(jdks) / SCATTER_PLOT_COLUMNS)
+    fig, axes = plt.subplots(
+        rows, SCATTER_PLOT_COLUMNS,
+        figsize=(
+            SCATTER_PLOT_COLUMNS * SCATTER_PLOT_PANEL_WIDTH_INCHES
+            + SCATTER_PLOT_HORIZONTAL_MARGIN_INCHES,
+            rows * SCATTER_PLOT_PANEL_HEIGHT_INCHES
+            + SCATTER_PLOT_VERTICAL_MARGIN_INCHES,
+        ),
+        sharex=True, sharey=True, squeeze=False,
+    )  # fmt: skip
+
+    flat_axes: list[Axes] = list(axes.flat)
+    panel_texts = []
+    for ax, jdk in zip(flat_axes, jdks, strict=False):
+        panel_df = scenario_df.filter(pl.col("JDK") == jdk)
+        panel_texts.append((ax, render_energy_time_scatter_panel(ax, panel_df, limits)))
+        ax.set_title(jdk, **SCATTER_PLOT_TITLE_FONT)
+
+        # Sharing the axes hides every tick label that another panel repeats
+        # below or to the left. Put them back, since the panels are spread
+        # down a whole page and each one has to be readable on its own.
+        ax.tick_params(
+            labelsize=SCATTER_PLOT_TICK_FONT["size"],
+            labelbottom=True,
+            labelleft=True,
+        )
+
+        # Read the ticks in the same terms as the points, not in scientific notation
+        for axis in (ax.xaxis, ax.yaxis):
+            axis.set_major_locator(
+                SymmetricalLogLocator(linthresh=SCATTER_PLOT_LINEAR_THRESHOLD, base=10)
+            )
+            axis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))
+
+    # The panels fill whole rows, so the grid can end with empty slots
+    for ax in flat_axes[len(jdks) :]:
+        ax.set_axis_off()
+
+    # Make it clear that the panels use a symlog scale
+    suffix = f"\n(logarithmic beyond ±{SCATTER_PLOT_LINEAR_THRESHOLD:g})"
+    fig.suptitle(scenario.capitalize(), **SCATTER_PLOT_SUPTITLE_FONT)
+    fig.supxlabel(f"$\\Delta$time (%){suffix}", ma="center", **SCATTER_PLOT_TITLE_FONT)
+    fig.supylabel(
+        f"$\\Delta$energy (%){suffix}", ma="center", **SCATTER_PLOT_TITLE_FONT
+    )
+    fig.tight_layout()
+
+    fig.canvas.draw()
+    arrowprops = {"arrowstyle": "-", "color": "gray", "lw": 0.5}
+    for ax, texts in panel_texts:
+        adjust_text(texts, ax=ax, arrowprops=arrowprops)
+
+    return fig
+
+
+def generate_energy_time_scatter_plots(
+    root_dir: Path,
+    long_df: pl.DataFrame,
+    jdk_versions: dict[str, JdkVersion],
+) -> None:
+    """Generate an energy-time scatter plot for each variant and scenario"""
+    # Computed once from both metrics of every variant and scenario, so that
+    # all the scatter plots share axis limits and stay comparable with each other.
+    limits = compute_scatter_panel_limits(
+        long_df.get_column("Time_Diff_Percent").to_numpy(),
+        long_df.get_column("Energy_Diff_Percent").to_numpy(),
+    )
+
+    for variant in sorted(long_df.get_column("Variant").unique()):
+        variant_df = long_df.filter(pl.col("Variant") == variant)
+        jdks = sort_jdks(variant_df.get_column("JDK").unique().to_list(), jdk_versions)
+
+        for scenario in sorted(variant_df.get_column("Scenario").unique()):
+            scenario_df = variant_df.filter(pl.col("Scenario") == scenario)
+            fig = render_energy_time_scatter_grid(scenario_df, scenario, jdks, limits)
+            try:
+                stem = f"{variant}_energy_time_scatter_{scenario}"
+                pgf_path = root_dir / f"{stem}.pgf"
+                png_path = root_dir / f"{stem}.png"
+                fig.savefig(pgf_path, format="pgf", backend="pgf")
+                fig.savefig(png_path, dpi=PLOT_DPI)
+                logger.info(
+                    "Created energy-time scatter plot '%s' and '%s'", pgf_path, png_path
+                )
+            finally:
+                plt.close(fig)
 
 
 # Orchestration
