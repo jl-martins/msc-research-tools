@@ -154,7 +154,7 @@ Options:
   --help                         show this help message and exit
   --run-id ID                    set the run id (default: YYYYMMDD_HHMMSS)
   --out-dir OUT_DIR              store the results in OUT_DIR
-                                 (default: $HOME/jbench-run-results/<suite-name>/<run-id>)
+                                 (default: $HOME/jbench-run-results/<suite-name>/<suite-version>/<run-id>)
   --log-file LOG_FILE            write logs to LOG_FILE (default: <out-dir>/run.log)
   --jdks JDKS                    select the target JDKs as a single,
                                  space-separated string
@@ -315,7 +315,7 @@ parse_args() {
     [[ -n "$SUITE_VERSION" ]] || die "--suite-version is required"
 
     : "${RUN_ID:="$(date +%Y%m%d_%H%M%S)"}"
-    : "${OUT_DIR:="$HOME/jbench-run-results/$SUITE_NAME/$RUN_ID"}"
+    : "${OUT_DIR:="$HOME/jbench-run-results/$SUITE_NAME/$SUITE_VERSION/$RUN_ID"}"
     : "${LOG_FILE:="$OUT_DIR/run.log"}"
     : "${HEAP_MULTIPLIER:="$DEFAULT_HEAP_MULTIPLIER"}"
     : "${ARTIFACT_DIR:="$DEFAULT_ARTIFACT_DIR"}"
