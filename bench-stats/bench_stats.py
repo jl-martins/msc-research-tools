@@ -28,10 +28,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import polars as pl
+from inflection import underscore
 from matplotlib.colors import Normalize, SymLogNorm
 from matplotlib.ticker import FuncFormatter, SymmetricalLogLocator
-from inflection import underscore
-from scipy.stats import DegenerateDataWarning, bootstrap, iqr, mannwhitneyu
+from scipy.stats import (
+    DegenerateDataWarning,
+    bootstrap,
+    iqr,
+    mannwhitneyu,
+    pearsonr,
+    permutation_test,
+    rankdata,
+    spearmanr,
+)
 from statsmodels.stats.multitest import multipletests
 
 logger = logging.getLogger(__name__)
@@ -109,11 +118,16 @@ IDLE_RUN_PREFIX = "idle_"
 MEASUREMENTS_FILE_NAME = "measurements.csv"
 SUMMARY_FILE_NAME = "summary.csv"
 COMPARISON_FILE_NAME = "comparison.csv"
+ENERGY_TIME_CORRELATION_FILE_NAME = "energy_time_correlation.csv"
 JAVA_VERSION_FILE_NAME = "java_version.txt"
 BASELINE_DIR_NAME = "loops"
 
 # Significance level for statistical hypothesis testing
 ALPHA = 0.05
+
+# Above this many observations, spearmanr's own p-value (a Student's t
+# approximation) is accurate enough that a permutation test is not needed
+SPEARMAN_PERMUTATION_TEST_MAX_N = 500
 
 # Valid methods for computing bootstrap confidence intervals
 type BootstrapMethod = Literal["percentile", "basic", "bca", "BCa"]
@@ -830,8 +844,87 @@ def collect_comparison_data(scenario_dirs: list[Path]) -> pl.DataFrame:
     return pl.concat(frames, how="vertical")
 
 
+def build_long_time_and_energy_table(comparison_data: pl.DataFrame) -> pl.DataFrame:
+    """Build a long (Benchmark, JDK, Scenario, Time_Diff_Percent, Energy_Diff_Percent) table"""
+    keys = ["Program", "JDK", "Scenario", "Variant"]
+    time_df = comparison_data.filter(pl.col("Metric") == Metric.TIME).select(
+        *keys, pl.col("Median_Difference_Percent").alias("Time_Diff_Percent")
+    )
+    energy_df = comparison_data.filter(
+        pl.col("Metric") == Metric.PACKAGE_AND_DRAM
+    ).select(*keys, pl.col("Median_Difference_Percent").alias("Energy_Diff_Percent"))
+
+    long_df = time_df.join(energy_df, on=keys, how="inner").drop("Variant")
+    finite = (
+        pl.col("Time_Diff_Percent").is_finite()
+        & pl.col("Energy_Diff_Percent").is_finite()
+    )
+    return long_df.filter(finite).rename({"Program": "Benchmark"})
+
+
+def spearman_row(
+    name: str,
+    subset: pl.DataFrame,
+    permutation_test_n_resamples: int = 9_999,
+) -> dict[str, Any]:
+    """Compute one row (N, Spearman's rho, p-value) of the energy-time correlation table"""
+    n = len(subset)
+    time_diff_percent = subset["Time_Diff_Percent"].to_numpy()
+    energy_diff_percent = subset["Energy_Diff_Percent"].to_numpy()
+
+    # spearmanr's own p-value comes from a Student's t approximation that is
+    # only accurate for >500 observations. Below that, build the null
+    # distribution by permutation instead, as scipy's own documentation
+    # recommends: hold one array fixed and permute the other.
+    if n > SPEARMAN_PERMUTATION_TEST_MAX_N:
+        rho, p_value = spearmanr(time_diff_percent, energy_diff_percent)
+    else:
+        # Unlike spearmanr, pearsonr vectorizes over permutations.
+        # Since Spearman's ρ is Pearson's r computed on ranks (as in
+        # https://github.com/scipy/scipy/blob/v1.17.1/scipy/stats/_stats_py.py#L5405-L5406)
+        # and rankdata is equivariant under permutation, we can use rankdata
+        # and pearsonr to vectorize the permutation test.
+        ranked_time_diff_percent = rankdata(time_diff_percent)
+        ranked_energy_diff_percent = rankdata(energy_diff_percent)
+
+        def statistic(
+            permuted_ranked_time_diff_percent: npt.NDArray[np.floating],
+            axis: int,
+        ) -> npt.NDArray[np.floating]:
+            return pearsonr(
+                permuted_ranked_time_diff_percent,
+                ranked_energy_diff_percent,
+                axis=axis,
+            ).statistic
+
+        result = permutation_test(
+            (ranked_time_diff_percent,), statistic,
+            permutation_type="pairings", vectorized=True,
+            n_resamples=permutation_test_n_resamples, rng=RNG,
+        )  # fmt: skip
+        rho, p_value = result.statistic, result.pvalue
+
+    return {
+        "Analysis": name,
+        "N": n,
+        "Spearman_Rho": float(rho),
+        "P_Value": float(p_value),
+    }
+
+
+def generate_energy_time_correlation_table(long_df: pl.DataFrame) -> pl.DataFrame:
+    """Compute the Spearman correlation between Time_Diff_Percent and Energy_Diff_Percent, overall and per scenario"""
+    rows = [spearman_row("Overall", long_df)]
+
+    for scenario in sorted(long_df.get_column("Scenario").unique()):
+        subset = long_df.filter(pl.col("Scenario") == scenario)
+        rows.append(spearman_row(scenario.capitalize(), subset))
+
+    return pl.DataFrame(rows)
+
+
 def generate_overall_stats(root_dir: Path, scenario_dirs: list[Path]) -> None:
-    """Generate overview statistics (per-scenario effect size heatmaps)"""
+    """Generate overview statistics"""
     comparison_data = collect_comparison_data(scenario_dirs)
     if comparison_data.is_empty():
         return
@@ -854,6 +947,12 @@ def generate_overall_stats(root_dir: Path, scenario_dirs: list[Path]) -> None:
                 root_dir / scenario, scenario, scenario_df,
                 metric, effect_size, norm, jdk_versions,
             )  # fmt: skip
+
+    long_df = build_long_time_and_energy_table(comparison_data)
+    correlation_df = generate_energy_time_correlation_table(long_df)
+    correlation_path = root_dir / ENERGY_TIME_CORRELATION_FILE_NAME
+    correlation_df.write_csv(correlation_path)
+    logger.info("Created energy-time correlation table '%s'", correlation_path)
 
 
 # Effect Size Heatmaps
