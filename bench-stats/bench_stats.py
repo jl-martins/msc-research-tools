@@ -11,14 +11,22 @@ This script recursively processes benchmark result directories and generates:
 
 import argparse
 import functools
+import hashlib
 import itertools
 import logging
+import logging.handlers
 import math
+import multiprocessing
+import os
 import re
 import warnings
-from collections import namedtuple
+from collections import defaultdict, namedtuple
+from collections.abc import Callable, Iterator
+from concurrent.futures import Executor, ProcessPoolExecutor
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
+from queue import Queue
 from typing import Any, Literal, NamedTuple, Protocol, TypedDict
 
 import matplotlib
@@ -40,6 +48,7 @@ from scipy.stats import (
     bootstrap,
     iqr,
     mannwhitneyu,
+    rankdata,
     spearmanr,
 )
 from statsmodels.stats.multitest import multipletests
@@ -116,6 +125,7 @@ SUMMARY_COLUMNS = IDENTITY_COLUMNS + [
 IDLE_RUN_PREFIX = "idle_"
 
 # File and directory names
+LOG_FILE_NAME = "bench-stats.log"
 MEASUREMENTS_FILE_NAME = "measurements.csv"
 SUMMARY_FILE_NAME = "summary.csv"
 COMPARISON_FILE_NAME = "comparison.csv"
@@ -135,8 +145,9 @@ PRIMARY_BOOTSTRAP_METHOD: BootstrapMethod = "BCa"
 # Fallback bootstrap method for degenerate data
 FALLBACK_BOOTSTRAP_METHOD: BootstrapMethod = "percentile"
 
-# Random number generator with a fixed seed for reproducible results
-RNG = np.random.default_rng(seed=42)
+# Root seed of every bootstrap. Each bootstrap derives its generator from this seed
+# and a deterministic sample key, so bootstrapped confidence intervals are deterministic.
+ROOT_SEED = 42
 
 # Numeric types
 type IntOrFloat = np.integer | np.floating
@@ -316,6 +327,16 @@ SCATTER_PLOT_IDENTITY_LINE_STYLE: dict[str, Any] = {
     "zorder": 1,
 }
 
+# Rounds `adjust_text` spends spreading the labels of a scatter plot
+SCATTER_PLOT_LABEL_ITERATIONS = 150
+
+# Leader from a point to wherever `adjust_text` had to move its label
+SCATTER_PLOT_LABEL_ARROW_STYLE: dict[str, Any] = {
+    "arrowstyle": "-",
+    "color": "gray",
+    "lw": 0.5,
+}
+
 # Where the correlation annotation sits, in Axes fractions
 SCATTER_PLOT_STAT_POSITION = (0.04, 0.96)
 
@@ -344,6 +365,31 @@ JAVA_VERSION_NUMBER_PATTERN = re.compile(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 type JdkVersion = tuple[int, int, int]
 
 
+class SampleKey(NamedTuple):
+    """Identifies the sample of runs a single measurements file holds"""
+
+    scenario: str
+    jdk: str
+    implementation: str
+    benchmark: str
+
+    @classmethod
+    def from_benchmark_directory(cls, benchmark_dir: Path) -> SampleKey:
+        """Identify the sample held in a `<scenario>/<jdk>/<implementation>/<benchmark>` directory"""
+        implementation_dir = benchmark_dir.parent
+        jdk_dir = implementation_dir.parent
+        scenario_dir = jdk_dir.parent
+        return cls(
+            scenario_dir.name,
+            jdk_dir.name,
+            implementation_dir.name,
+            benchmark_dir.name,
+        )
+
+    def __str__(self) -> str:
+        return "/".join(self)
+
+
 class TwoSampleStatistic(Protocol):
     def __call__(
         self,
@@ -353,6 +399,14 @@ class TwoSampleStatistic(Protocol):
         *,
         axis: int = 0,
     ) -> IntOrFloat | npt.NDArray[IntOrFloat]: ...
+
+
+class ComparisonTask(NamedTuple):
+    """A single task for comparing a benchmark with the baseline"""
+
+    baseline_dir: Path
+    variant_dir: Path
+    benchmark: str
 
 
 class ComparisonRow(TypedDict):
@@ -393,11 +447,60 @@ def setup_logging(root_dir: Path, verbose: bool = False) -> None:
     root_logger.addHandler(console_handler)
 
     # File Handler
-    log_file = root_dir / "bench-stats.log"
+    log_file = root_dir / LOG_FILE_NAME
     file_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
     file_handler.setFormatter(file_formatter)
     root_logger.addHandler(file_handler)
+
+
+# Parallelism
+def setup_worker_logging(log_queue: Queue[logging.LogRecord], level: int) -> None:
+    """Put a worker's log records on `log_queue` for its parent process to write out"""
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    root_logger.addHandler(logging.handlers.QueueHandler(log_queue))
+    logging.captureWarnings(True)
+
+
+@contextmanager
+def worker_pool(jobs: int) -> Iterator[Executor | None]:
+    """Start a pool of `jobs` worker processes, or no pool when `jobs` is 1"""
+    if jobs == 1:
+        yield None
+        return
+
+    # Writing one log file from several processes is not supported, so the workers
+    # send their records here and this process does all the writing.
+    root_logger = logging.getLogger()
+    with multiprocessing.Manager() as manager:
+        listener = logging.handlers.QueueListener(
+            log_queue := manager.Queue(),
+            *root_logger.handlers,
+            respect_handler_level=True,
+        )
+        listener.start()
+        try:
+            with ProcessPoolExecutor(
+                max_workers=jobs,
+                initializer=setup_worker_logging,
+                initargs=(log_queue, root_logger.level),
+            ) as executor:
+                yield executor
+        finally:
+            listener.stop()
+
+
+def run_tasks[R](
+    tasks: list[Callable[[], R]],
+    executor: Executor | None,
+) -> list[R]:
+    """Run every task, in this process or spread over `executor`, and return the results in task order"""
+    if executor is None:
+        return [t() for t in tasks]
+
+    futures = [executor.submit(t) for t in tasks]
+    return [future.result() for future in futures]
 
 
 # JDK Versions
@@ -439,7 +542,7 @@ def collect_jdk_versions(scenario_dirs: list[Path]) -> dict[str, JdkVersion]:
     """Map the name of every JDK directory to the version of the JDK it holds"""
     versions: dict[str, JdkVersion] = {}
     for scenario_dir in scenario_dirs:
-        for jdk_dir in filter(Path.is_dir, scenario_dir.iterdir()):
+        for jdk_dir in sorted(filter(Path.is_dir, scenario_dir.iterdir())):
             if jdk_dir.name in versions:
                 continue
 
@@ -514,6 +617,15 @@ def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:
         return None
 
 
+def export_plot(fig: plt.Figure, output_dir: Path, stem: str, description: str) -> None:
+    """Write `fig` into `output_dir` as a PGF and a PNG file, both named `stem`"""
+    pgf_path = output_dir / f"{stem}.pgf"
+    png_path = output_dir / f"{stem}.png"
+    fig.savefig(pgf_path, format="pgf", backend="pgf")
+    fig.savefig(png_path, dpi=PLOT_DPI)
+    logger.info("Created %s '%s' and '%s'", description, pgf_path, png_path)
+
+
 # Summarization
 def generate_benchmark_summary(measurements_path: Path) -> Path | None:
     """Summarize raw measurements and store the result in a CSV"""
@@ -575,7 +687,7 @@ def generate_combined_summary(implementation_dir: Path) -> None:
     try:
         summary_files: list[Path] = [
             d / SUMMARY_FILE_NAME
-            for d in implementation_dir.iterdir()
+            for d in sorted(implementation_dir.iterdir())
             if d.is_dir() and (d / SUMMARY_FILE_NAME).exists()
         ]
 
@@ -622,6 +734,28 @@ def median_difference_percent(
         return (med_y - med_x) / med_x * 100.0
 
 
+def mannwhitneyu_statistic(
+    x: npt.NDArray[IntOrFloat],
+    y: npt.NDArray[IntOrFloat],
+    axis: int = 0,
+) -> np.floating | npt.NDArray[np.floating]:
+    """
+    Return the Mann-Whitney U statistic for two samples.
+
+    Unlike `scipy.stats.mannwhitneyu`, this function does not broadcast inputs
+    or calculate p-values, bypassing significant overhead during repeated calls,
+    e.g., inside bootstrap resamplings.
+    """
+    ranks = rankdata(np.concatenate([x, y], axis=axis), axis=axis)
+
+    # A slice rather than a take, so the ranks of `x` stay a view of `ranks`
+    nx = x.shape[axis]
+    x_slice: list[slice] = [slice(None)] * ranks.ndim
+    x_slice[axis] = slice(None, nx)
+
+    return ranks[tuple(x_slice)].sum(axis=axis) - nx * (nx + 1) / 2
+
+
 def cliffs_delta(
     x: npt.NDArray[IntOrFloat],
     y: npt.NDArray[IntOrFloat],
@@ -639,7 +773,7 @@ def cliffs_delta(
     (i.e., `u` with the comparison axis removed).
     """
     if u is None:
-        u, _ = mannwhitneyu(x, y, alternative="two-sided", axis=axis)
+        u = mannwhitneyu_statistic(x, y, axis=axis)
 
     u = np.asarray(u)
     nx = x.shape[axis]
@@ -647,52 +781,57 @@ def cliffs_delta(
     return (2 * u) / (nx * ny) - 1
 
 
+def bootstrap_rng(*identity: str) -> np.random.Generator:
+    """Return the generator that the sample named by `identity` resamples with"""
+    # Use SHA-256 instead of `hash()` for stable, reproducible seeds
+    digest = hashlib.sha256("/".join(identity).encode()).digest()
+    seed = np.random.SeedSequence(
+        ROOT_SEED,
+        spawn_key=(int.from_bytes(digest, "big"),),
+    )
+    return np.random.default_rng(seed)
+
+
 def two_sample_bootstrap_ci(
     x: npt.NDArray[IntOrFloat],
     y: npt.NDArray[IntOrFloat],
     statistic: TwoSampleStatistic,
+    rng: np.random.Generator,
     n_resamples: int = 9_999,
 ) -> ConfidenceInterval:
     """Return the bootstrap confidence interval for a custom two-sample statistic."""
+    resample = functools.partial(
+        bootstrap,
+        data=(x, y),
+        statistic=statistic,
+        vectorized=True,
+        confidence_level=1 - ALPHA,
+        rng=rng,
+    )
+
+    # Suppress expected warnings from zero-variance inputs
     with (
         warnings.catch_warnings(record=False),
-        # Suppress expected warnings from zero-variance inputs
         np.errstate(divide="ignore", invalid="ignore"),
     ):
-        warnings.simplefilter("error", DegenerateDataWarning)
-        try:
-            res = bootstrap(
-                data=(x, y),
-                statistic=statistic,
-                vectorized=True,
-                n_resamples=n_resamples,
-                confidence_level=1 - ALPHA,
-                method=PRIMARY_BOOTSTRAP_METHOD,
-                rng=RNG,
-            )
-        except DegenerateDataWarning:
-            logger.info(
-                "Degenerate data encountered. Falling back to '%s' bootstrap...",
-                FALLBACK_BOOTSTRAP_METHOD,
-            )
-            # As of SciPy 1.17.1, `bootstrap` emits `DegenerateDataWarning` when any
-            # confidence interval bound is NaN, regardless of the selected bootstrap method.
-            # Since the primary BCa attempt has already detected and handled this condition,
-            # suppress the warning during the fallback to avoid duplicate logs.
-            with warnings.catch_warnings(
-                record=False,
-                action="ignore",
-                category=DegenerateDataWarning,
-            ):
-                res = bootstrap(
-                    data=(x, y),
-                    statistic=statistic,
-                    vectorized=True,
-                    n_resamples=n_resamples,
-                    confidence_level=1 - ALPHA,
-                    method=FALLBACK_BOOTSTRAP_METHOD,
-                    random_state=RNG,
-                )
+        warnings.simplefilter("ignore", DegenerateDataWarning)
+        res = resample(n_resamples=n_resamples, method=PRIMARY_BOOTSTRAP_METHOD)
+
+        ci = res.confidence_interval
+        if np.isfinite([ci.low, ci.high]).all():
+            return ci
+
+        logger.info(
+            "Degenerate data encountered. Falling back to '%s' bootstrap...",
+            FALLBACK_BOOTSTRAP_METHOD,
+        )
+        # Only BCa's acceleration is undefined for these resamples.
+        # The resamples themselves are sound, so the bootstrap result can be reused.
+        res = resample(
+            n_resamples=0,
+            bootstrap_result=res,
+            method=FALLBACK_BOOTSTRAP_METHOD,
+        )
 
     return res.confidence_interval
 
@@ -716,40 +855,46 @@ def load_comparison_pair(
 
 
 def compare_metric(
-    benchmark: str,
+    sample_key: SampleKey,
     metric: str,
-    variant: str,
     baseline_values: npt.NDArray[IntOrFloat],
     variant_values: npt.NDArray[IntOrFloat],
 ) -> ComparisonRow | None:
     """Compute all comparative statistics for a single metric pair"""
     x = baseline_values
     y = variant_values
+    benchmark, variant = sample_key.benchmark, sample_key.implementation
 
     if len(x) < 2 or len(y) < 2:
         logger.warning(
             "%s/%s: insufficient samples (baseline: %d, %s: %d)",
-            benchmark, metric, len(x), variant, len(y),
+            sample_key, metric, len(x), variant, len(y),
         )  # fmt: skip
         return None
 
     med_x, med_y = np.median(x), np.median(y)
     med_diff = med_y - med_x
     med_diff_pct = (med_diff / med_x) * 100 if med_x != 0 else np.nan
-    med_diff_pct_ci = two_sample_bootstrap_ci(x, y, median_difference_percent)
+    med_diff_pct_ci = two_sample_bootstrap_ci(
+        x, y, median_difference_percent,
+        bootstrap_rng(*sample_key, metric, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
+    )  # fmt: skip
     iqr_x, iqr_y = iqr(x), iqr(y)
 
     # Pass the variant as the first sample so that the sign of Cliff's delta
     # indicates the direction of the difference between variant and baseline.
     u, p_val = mannwhitneyu(y, x, alternative="two-sided")
     cliffs_d = float(cliffs_delta(y, x, u))
-    cliffs_d_ci = two_sample_bootstrap_ci(y, x, cliffs_delta)
+    cliffs_d_ci = two_sample_bootstrap_ci(
+        y, x, cliffs_delta,
+        bootstrap_rng(*sample_key, metric, EffectSize.CLIFFS_DELTA),
+    )  # fmt: skip
 
     significant = bool(p_val <= ALPHA)
     if significant:
         logger.info(
             "%s/%s: significant difference detected (p=%.4g, Cliff's Delta=%.3f)",
-            benchmark, metric, p_val, cliffs_d,
+            sample_key, metric, p_val, cliffs_d,
         )  # fmt: skip
 
     row: ComparisonRow = {
@@ -793,14 +938,10 @@ def apply_bh_correction_per_metric(comparison_df: pl.DataFrame) -> pl.DataFrame:
     return comparison_df.group_by("Metric").map_groups(apply_bh_correction)
 
 
-def compare_baseline_and_variant(
-    baseline_dir: Path,
-    variant_dir: Path,
-) -> pl.DataFrame | None:
-    """Compare all common benchmarks between a baseline and variant directory"""
+def common_benchmarks(baseline_dir: Path, variant_dir: Path) -> list[str]:
+    """Return the common benchmarks from the specified directories"""
     baseline_bms = {d.name for d in baseline_dir.iterdir() if d.is_dir()}
     variant_bms = {d.name for d in variant_dir.iterdir() if d.is_dir()}
-    common_bms = sorted(baseline_bms.intersection(variant_bms))
     missing_in_baseline = variant_bms - baseline_bms
     missing_in_variant = baseline_bms - variant_bms
     if missing_in_baseline:
@@ -815,25 +956,39 @@ def compare_baseline_and_variant(
             variant_dir, baseline_dir, sorted(missing_in_variant)
         )  # fmt: skip
 
-    logger.info(
-        "Comparing %d common benchmarks between '%s' and '%s'...",
-        len(common_bms), baseline_dir, variant_dir
-    )  # fmt: skip
+    return sorted(baseline_bms.intersection(variant_bms))
+
+
+def compare_benchmark(task: ComparisonTask) -> list[ComparisonRow]:
+    """Compare every metric of one benchmark between a baseline and a variant"""
+    comparison_pair = load_comparison_pair(
+        task.baseline_dir,
+        task.variant_dir,
+        task.benchmark,
+    )
+    if comparison_pair is None:
+        return []
+
+    baseline_df, variant_df = comparison_pair
+    sample_key = SampleKey.from_benchmark_directory(task.variant_dir / task.benchmark)
+
     comparison_rows: list[ComparisonRow] = []
-    for benchmark in common_bms:
-        pair = load_comparison_pair(baseline_dir, variant_dir, benchmark)
-        if pair is None:
-            continue
+    for metric in METRICS:
+        x = baseline_df[metric].drop_nulls().to_numpy()
+        y = variant_df[metric].drop_nulls().to_numpy()
+        row = compare_metric(sample_key, metric, x, y)
+        if row is not None:
+            comparison_rows.append(row)
 
-        baseline_df, variant_df = pair
-        variant = variant_dir.name
-        for metric in METRICS:
-            x = baseline_df[metric].drop_nulls().to_numpy()
-            y = variant_df[metric].drop_nulls().to_numpy()
-            row = compare_metric(benchmark, metric, variant, x, y)
-            if row is not None:
-                comparison_rows.append(row)
+    return comparison_rows
 
+
+def build_comparison_frame(
+    baseline_dir: Path,
+    variant_dir: Path,
+    comparison_rows: list[ComparisonRow],
+) -> pl.DataFrame | None:
+    """Correct and order the rows of one variant's comparison, or `None` if it has none"""
     if not comparison_rows:
         logger.warning(
             "Empty comparison result detected for the following directories:\n"
@@ -847,9 +1002,11 @@ def compare_baseline_and_variant(
     return comparison_df.sort(["Program", "Metric", "Variant"])
 
 
-def generate_comparisons(root_dir: Path) -> None:
+def generate_comparisons(root_dir: Path, executor: Executor | None) -> None:
     """Compare each benchmark variant with the baseline and store the results in a CSV in the variant's directory"""
-    for jdk_dir in filter(Path.is_dir, root_dir.iterdir()):
+    variant_pairs: list[tuple[Path, Path]] = []
+    tasks: list[ComparisonTask] = []
+    for jdk_dir in sorted(filter(Path.is_dir, root_dir.iterdir())):
         baseline_dir = jdk_dir / BASELINE_DIR_NAME
 
         if not baseline_dir.exists():
@@ -860,17 +1017,55 @@ def generate_comparisons(root_dir: Path) -> None:
             )  # fmt: skip
             continue
 
-        for variant_dir in filter(is_non_baseline_dir, jdk_dir.iterdir()):
-            result_df = compare_baseline_and_variant(baseline_dir, variant_dir)
-            if result_df is None:
-                continue
+        for variant_dir in sorted(filter(is_non_baseline_dir, jdk_dir.iterdir())):
+            benchmarks = common_benchmarks(baseline_dir, variant_dir)
+            logger.info(
+                "Comparing %d common benchmarks between '%s' and '%s'...",
+                len(benchmarks), baseline_dir, variant_dir
+            )  # fmt: skip
+            variant_pairs.append((baseline_dir, variant_dir))
+            tasks += [
+                ComparisonTask(baseline_dir, variant_dir, benchmark)
+                for benchmark in benchmarks
+            ]
 
-            comparison_path = variant_dir / COMPARISON_FILE_NAME
-            result_df.write_csv(comparison_path)
-            logger.info("Created statistical comparison '%s'", comparison_path)
+    # Each task seeds its bootstraps from the sample it compares, so its results are
+    # independent of the process that runs it. The results are returned in task order.
+    task_rows = run_tasks(
+        [functools.partial(compare_benchmark, task) for task in tasks],
+        executor,
+    )
+    rows_by_variant: dict[Path, list[ComparisonRow]] = defaultdict(list)
+    for task, comparison_rows in zip(tasks, task_rows, strict=True):
+        rows_by_variant[task.variant_dir] += comparison_rows
 
-            for metric, effect_size in FOREST_PLOTS:
-                generate_forest_plot(jdk_dir, variant_dir, result_df, metric, effect_size)  # fmt: skip
+    plot_tasks: list[Callable[[], None]] = []
+    for baseline_dir, variant_dir in variant_pairs:
+        result_df = build_comparison_frame(
+            baseline_dir,
+            variant_dir,
+            rows_by_variant[variant_dir],
+        )
+        if result_df is None:
+            continue
+
+        comparison_path = variant_dir / COMPARISON_FILE_NAME
+        result_df.write_csv(comparison_path)
+        logger.info("Created statistical comparison '%s'", comparison_path)
+
+        plot_tasks += [
+            functools.partial(
+                generate_forest_plot,
+                variant_dir.parent,
+                variant_dir,
+                result_df,
+                metric,
+                effect_size,
+            )
+            for metric, effect_size in FOREST_PLOTS
+        ]
+
+    run_tasks(plot_tasks, executor)
 
 
 # Cross-Scenario Overview Statistics
@@ -878,8 +1073,8 @@ def collect_comparison_data(scenario_dirs: list[Path]) -> pl.DataFrame:
     """Concatenate all comparison CSVs and tag them with Scenario and JDK columns"""
     frames = []
     for scenario_dir in scenario_dirs:
-        for jdk_dir in filter(Path.is_dir, scenario_dir.iterdir()):
-            for variant_dir in filter(is_non_baseline_dir, jdk_dir.iterdir()):
+        for jdk_dir in sorted(filter(Path.is_dir, scenario_dir.iterdir())):
+            for variant_dir in sorted(filter(is_non_baseline_dir, jdk_dir.iterdir())):
                 comparison_path = variant_dir / COMPARISON_FILE_NAME
                 if not comparison_path.exists():
                     logger.warning("Missing '%s'; skipping", comparison_path)
@@ -963,11 +1158,15 @@ def generate_energy_time_correlation_table(long_df: pl.DataFrame) -> pl.DataFram
     return pl.DataFrame(rows)
 
 
-def generate_overall_stats(root_dir: Path, scenario_dirs: list[Path]) -> None:
-    """Generate overview statistics"""
+def overall_plot_tasks(
+    root_dir: Path,
+    scenario_dirs: list[Path],
+) -> list[Callable[[], None]]:
+    """Return the list of tasks responsible for producing overview statistics"""
+    plot_tasks: list[Callable[[], None]] = []
     comparison_data = collect_comparison_data(scenario_dirs)
     if comparison_data.is_empty():
-        return
+        return plot_tasks
 
     jdk_versions = collect_jdk_versions(scenario_dirs)
     for metric, effect_size in HEATMAPS:
@@ -981,24 +1180,40 @@ def generate_overall_stats(root_dir: Path, scenario_dirs: list[Path]) -> None:
             )  # fmt: skip
             continue
 
-        for scenario in sorted(comparison_data.get_column("Scenario").unique()):
-            scenario_df = comparison_data.filter(pl.col("Scenario") == scenario)
-            generate_effect_size_heatmaps(
-                root_dir / scenario, scenario, scenario_df,
-                metric, effect_size, norm, jdk_versions,
-            )  # fmt: skip
+        plot_tasks += [
+            functools.partial(
+                generate_effect_size_heatmaps,
+                root_dir / scenario,
+                scenario,
+                comparison_data.filter(pl.col("Scenario") == scenario),
+                metric,
+                effect_size,
+                norm,
+                jdk_versions,
+            )
+            for scenario in sorted(comparison_data.get_column("Scenario").unique())
+        ]
 
     long_df = build_long_time_and_energy_table(comparison_data)
     if long_df.is_empty():
         logger.warning("No energy-time data found; skipping energy-time correlation")
-        return
+        return plot_tasks
 
     correlation_df = generate_energy_time_correlation_table(long_df)
     correlation_path = root_dir / ENERGY_TIME_CORRELATION_FILE_NAME
     correlation_df.write_csv(correlation_path)
     logger.info("Created energy-time correlation table '%s'", correlation_path)
 
-    generate_energy_time_scatter_plots(root_dir, long_df, jdk_versions)
+    return plot_tasks + energy_time_scatter_plot_tasks(root_dir, long_df, jdk_versions)
+
+
+def generate_overall_stats(
+    root_dir: Path,
+    scenario_dirs: list[Path],
+    executor: Executor | None,
+) -> None:
+    """Generate overview statistics"""
+    run_tasks(overall_plot_tasks(root_dir, scenario_dirs), executor)
 
 
 # Effect Size Heatmaps
@@ -1188,13 +1403,9 @@ def generate_effect_size_heatmaps(
     for variant, data in heatmaps.items():
         title = f"{scenario} / {variant} — {metric_label}"
         fig = render_effect_size_heatmap(data, effect_size, norm, title)
+        stem = f"{variant}_{underscore(metric_label)}_{underscore(effect_size)}_heatmap"
         try:
-            stem = f"{variant}_{underscore(metric_label)}_{underscore(effect_size)}_heatmap"  # fmt: skip
-            pgf_path = output_dir / f"{stem}.pgf"
-            png_path = output_dir / f"{stem}.png"
-            fig.savefig(pgf_path, format="pgf", backend="pgf")
-            fig.savefig(png_path, dpi=PLOT_DPI)
-            logger.info("Created heatmaps '%s' and '%s'", pgf_path, png_path)
+            export_plot(fig, output_dir, stem, "heatmaps")
         finally:
             plt.close(fig)
 
@@ -1354,13 +1565,9 @@ def generate_forest_plot(
         return
 
     fig = render_forest_plot(plot_df, effect_size, title)
+    stem = f"{underscore(metric_label)}_{underscore(effect_size)}_forest_plot"
     try:
-        stem = f"{underscore(metric_label)}_{underscore(effect_size)}_forest_plot"
-        pgf_path = variant_dir / f"{stem}.pgf"
-        png_path = variant_dir / f"{stem}.png"
-        fig.savefig(pgf_path, format="pgf", backend="pgf")
-        fig.savefig(png_path, dpi=PLOT_DPI)
-        logger.info("Created forest plots '%s' and '%s'", pgf_path, png_path)
+        export_plot(fig, variant_dir, stem, "forest plots")
     finally:
         plt.close(fig)
 
@@ -1487,19 +1694,39 @@ def render_energy_time_scatter_grid(
     fig.tight_layout()
 
     fig.canvas.draw()
-    arrowprops = {"arrowstyle": "-", "color": "gray", "lw": 0.5}
     for ax, texts in panel_texts:
-        adjust_text(texts, ax=ax, arrowprops=arrowprops)
+        adjust_text(
+            texts,
+            ax=ax,
+            iter_lim=SCATTER_PLOT_LABEL_ITERATIONS,
+            arrowprops=SCATTER_PLOT_LABEL_ARROW_STYLE,
+        )
 
     return fig
 
 
-def generate_energy_time_scatter_plots(
+def generate_energy_time_scatter_plot(
+    output_dir: Path,
+    scenario_df: pl.DataFrame,
+    scenario: str,
+    jdks: list[str],
+    limits: tuple[float, float],
+    stem: str,
+) -> None:
+    """Generate one scenario's grid of energy-time scatter panels"""
+    fig = render_energy_time_scatter_grid(scenario_df, scenario, jdks, limits)
+    try:
+        export_plot(fig, output_dir, stem, "energy-time scatter plot")
+    finally:
+        plt.close(fig)
+
+
+def energy_time_scatter_plot_tasks(
     root_dir: Path,
     long_df: pl.DataFrame,
     jdk_versions: dict[str, JdkVersion],
-) -> None:
-    """Generate an energy-time scatter plot for each variant and scenario"""
+) -> list[Callable[[], None]]:
+    """Return an energy-time scatter plot for each variant and scenario"""
     # Computed once from both metrics of every variant and scenario, so that
     # all the scatter plots share axis limits and stay comparable with each other.
     limits = compute_scatter_panel_limits(
@@ -1507,28 +1734,29 @@ def generate_energy_time_scatter_plots(
         long_df.get_column("Energy_Diff_Percent").to_numpy(),
     )
 
+    plot_tasks: list[Callable[[], None]] = []
     for variant in sorted(long_df.get_column("Variant").unique()):
         variant_df = long_df.filter(pl.col("Variant") == variant)
         jdks = sort_jdks(variant_df.get_column("JDK").unique().to_list(), jdk_versions)
 
-        for scenario in sorted(variant_df.get_column("Scenario").unique()):
-            scenario_df = variant_df.filter(pl.col("Scenario") == scenario)
-            fig = render_energy_time_scatter_grid(scenario_df, scenario, jdks, limits)
-            try:
-                stem = f"{variant}_energy_time_scatter_{scenario}"
-                pgf_path = root_dir / f"{stem}.pgf"
-                png_path = root_dir / f"{stem}.png"
-                fig.savefig(pgf_path, format="pgf", backend="pgf")
-                fig.savefig(png_path, dpi=PLOT_DPI)
-                logger.info(
-                    "Created energy-time scatter plot '%s' and '%s'", pgf_path, png_path
-                )
-            finally:
-                plt.close(fig)
+        plot_tasks += [
+            functools.partial(
+                generate_energy_time_scatter_plot,
+                root_dir,
+                variant_df.filter(pl.col("Scenario") == scenario),
+                scenario,
+                jdks,
+                limits,
+                f"{variant}_energy_time_scatter_{scenario}",
+            )
+            for scenario in sorted(variant_df.get_column("Scenario").unique())
+        ]
+
+    return plot_tasks
 
 
 # Orchestration
-def generate_stats(root_dir: Path) -> None:
+def generate_stats(root_dir: Path, executor: Executor | None) -> None:
     """Generate benchmark statistics from raw measurements"""
     if not root_dir.exists():
         logger.error("Root directory '%s' does not exist", root_dir)
@@ -1556,12 +1784,12 @@ def generate_stats(root_dir: Path) -> None:
             logger.warning("Failed path validation for '%s': %s", measurements_path, e)
 
     # 2. Concatenate benchmark summaries per implementation (loops, sequential streams or parallel streams)
-    for jdk_dir in (d for d in root_dir.iterdir() if d.is_dir()):
-        for implementation_dir in (d for d in jdk_dir.iterdir() if d.is_dir()):
+    for jdk_dir in sorted(d for d in root_dir.iterdir() if d.is_dir()):
+        for implementation_dir in sorted(d for d in jdk_dir.iterdir() if d.is_dir()):
             generate_combined_summary(implementation_dir)
 
     # 3. Generate comparative statistics
-    generate_comparisons(root_dir)
+    generate_comparisons(root_dir, executor)
 
     # 4. Log completion
     logger.info(
@@ -1574,7 +1802,7 @@ def generate_stats(root_dir: Path) -> None:
     )
 
 
-def run(root_dir: Path) -> None:
+def run(root_dir: Path, jobs: int) -> None:
     """Process every scenario subdirectory of `root_dir` and generate overview statistics"""
     if not root_dir.exists():
         logger.error("Root directory '%s' does not exist", root_dir)
@@ -1582,14 +1810,24 @@ def run(root_dir: Path) -> None:
 
     scenario_dirs = sorted(d for d in root_dir.iterdir() if d.is_dir())
     logger.info(
-        "Processing %d scenario director%s: %s",
+        "Processing %d scenario director%s: %s over %d process%s",
         len(scenario_dirs), "y" if len(scenario_dirs) == 1 else "ies",
-        [d.name for d in scenario_dirs],
+        [d.name for d in scenario_dirs], jobs, "" if jobs == 1 else "es",
     )  # fmt: skip
-    for scenario_dir in scenario_dirs:
-        generate_stats(scenario_dir)
+    with worker_pool(jobs) as executor:
+        for scenario_dir in scenario_dirs:
+            generate_stats(scenario_dir, executor)
 
-    generate_overall_stats(root_dir, scenario_dirs)
+        generate_overall_stats(root_dir, scenario_dirs, executor)
+
+
+def positive_int(value: str) -> int:
+    """Parse a command line argument that must be a positive integer"""
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be positive, was {number}")
+
+    return number
 
 
 def main() -> None:
@@ -1605,6 +1843,12 @@ def main() -> None:
         help="root directory for benchmark results (default: current working directory)",
     )
     parser.add_argument(
+        "--jobs",
+        type=positive_int,
+        default=os.process_cpu_count() or 1,
+        help="worker processes to spread the statistics and plots over (default: %(default)s)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="enable debug logging",
@@ -1615,7 +1859,7 @@ def main() -> None:
     setup_logging(root_dir, args.verbose)
 
     logger.info("Using root directory '%s'", root_dir)
-    run(root_dir)
+    run(root_dir, args.jobs)
 
 
 if __name__ == "__main__":
