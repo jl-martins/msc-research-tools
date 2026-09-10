@@ -1,12 +1,39 @@
 #!/usr/bin/env -S uv run
 
 """
-Benchmark Summary Aggregator with Non-Parametric Statistics
+Aggregate benchmark results using non-parametric statistics.
 
-This script recursively processes benchmark result directories and generates:
-1. Per-benchmark summaries (Median and IQR for 7 metrics)
-2. Per-implementation aggregated summaries
-3. Statistical comparisons (Cliff's Delta and difference of medians) against baseline
+This script recursively processes files matching:
+
+    <root>/<scenario>/<jdk>/<implementation>/<benchmark>/measurements.csv
+
+and produces the following outputs:
+
+1. Measurement summaries for energy, time, temperature, and memory,
+   namely:
+   - A `summary.csv` in each benchmark directory containing the median,
+     interquartile range (IQR), and sample count.
+   - A `summary.csv` in each implementation directory containing the same
+     statistics aggregated across that implementation's benchmarks.
+   - A `comparison.csv` comparing each variant with the `loops` baseline.
+     Comparisons include:
+       - the difference in medians and its bootstrap confidence interval;
+       - Cliff's delta and its bootstrap confidence interval;
+       - Mann-Whitney U test p-values, adjusted within each metric using the
+         Benjamini-Hochberg procedure.
+
+2. Total energy (package + DRAM) statistics, including:
+   - Forest plots for each variant in the corresponding JDK directory.
+   - Scenario-level heatmaps in the corresponding scenario directory.
+
+3. Time and total energy correlation consisting of:
+   - A Spearman rank-correlation table under `<root>`, quantifying the
+     relationship between the percentage changes in median time and total
+     energy relative to the baseline.
+   - Corresponding scatter plots under `<root>`.
+
+Bootstrap resampling is deterministically seeded from the resampled data,
+making results reproducible regardless of execution order or scheduling.
 """
 
 import argparse
