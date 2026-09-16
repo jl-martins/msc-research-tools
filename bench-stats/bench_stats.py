@@ -754,7 +754,7 @@ def median_difference_percent(
     y: npt.NDArray[IntOrFloat],
     axis: int = 0,
 ) -> np.floating | npt.NDArray[np.floating]:
-    """Return `median(y) - median(x)`."""
+    """Return `median(y) - median(x)`, as a percentage of `median(x)."""
     med_x = np.median(x, axis=axis)
     med_y = np.median(y, axis=axis)
     with np.errstate(divide="ignore", invalid="ignore"):
