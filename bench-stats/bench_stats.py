@@ -30,7 +30,7 @@ and produces the following outputs:
    - A Spearman rank-correlation table under `<root>`, quantifying the
      relationship between the percentage changes in median time and total
      energy relative to the baseline.
-   - Corresponding scatter plots under `<root>`.
+   - Scatter plots of those changes in each scenario directory.
 
 Bootstrap resampling is deterministically seeded from the resampled data,
 making results reproducible regardless of execution order or scheduling.
@@ -1769,12 +1769,12 @@ def energy_time_scatter_plot_tasks(
         plot_tasks += [
             functools.partial(
                 generate_energy_time_scatter_plot,
-                root_dir,
+                root_dir / scenario,
                 variant_df.filter(pl.col("Scenario") == scenario),
                 scenario,
                 jdks,
                 limits,
-                f"{variant}_energy_time_scatter_{scenario}",
+                f"{variant}_energy_time_scatter_plot",
             )
             for scenario in sorted(variant_df.get_column("Scenario").unique())
         ]
