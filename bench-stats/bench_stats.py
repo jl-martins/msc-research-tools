@@ -193,9 +193,6 @@ ConfidenceInterval = namedtuple("ConfidenceInterval", ["low", "high"])
 # Confidence level (%) corresponding to `ALPHA`, for display purposes
 CI_LEVEL_PERCENT = round((1 - ALPHA) * 100)
 
-# DPI for plots in PNG format
-PLOT_DPI = 300
-
 
 # Forest plot configurations
 
@@ -639,12 +636,10 @@ def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:
 
 
 def export_plot(fig: plt.Figure, output_dir: Path, stem: str, description: str) -> None:
-    """Write `fig` into `output_dir` as a PGF and a PNG file, both named `stem`"""
+    """Write `fig` into `output_dir` as a PGF file named `stem`"""
     pgf_path = output_dir / f"{stem}.pgf"
-    png_path = output_dir / f"{stem}.png"
     fig.savefig(pgf_path, format="pgf", backend="pgf")
-    fig.savefig(png_path, dpi=PLOT_DPI)
-    logger.info("Created %s '%s' and '%s'", description, pgf_path, png_path)
+    logger.info("Created %s '%s'", description, pgf_path)
 
 
 # Summarization
@@ -1394,7 +1389,7 @@ def generate_effect_size_heatmaps(
         fig = render_effect_size_heatmap(data, effect_size, norm, title)
         stem = f"{variant}_{underscore(metric_label)}_{underscore(effect_size)}_heatmap"
         try:
-            export_plot(fig, output_dir, stem, "heatmaps")
+            export_plot(fig, output_dir, stem, "heatmap")
         finally:
             plt.close(fig)
 
@@ -1556,7 +1551,7 @@ def generate_forest_plot(
     fig = render_forest_plot(plot_df, effect_size, title)
     stem = f"{underscore(metric_label)}_{underscore(effect_size)}_forest_plot"
     try:
-        export_plot(fig, variant_dir, stem, "forest plots")
+        export_plot(fig, variant_dir, stem, "forest plot")
     finally:
         plt.close(fig)
 
