@@ -18,9 +18,7 @@ and produces the following outputs:
    - A `comparison.csv` comparing each variant with the `loops` baseline.
      Comparisons include:
        - the difference in medians and its bootstrap confidence interval;
-       - Cliff's delta and its bootstrap confidence interval;
-       - Mann-Whitney U test p-values, adjusted within each metric using the
-         Benjamini-Hochberg procedure.
+       - Cliff's delta and its bootstrap confidence interval.
 
 2. Total energy (package + DRAM) statistics, including:
    - Forest plots for each variant in the corresponding JDK directory.
@@ -74,11 +72,9 @@ from scipy.stats import (
     DegenerateDataWarning,
     bootstrap,
     iqr,
-    mannwhitneyu,
     rankdata,
     spearmanr,
 )
-from statsmodels.stats.multitest import multipletests
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +156,7 @@ ENERGY_TIME_CORRELATION_FILE_NAME = "energy_time_correlation.csv"
 JAVA_VERSION_FILE_NAME = "java_version.txt"
 BASELINE_DIR_NAME = "loops"
 
-# Significance level for statistical hypothesis testing
+# One minus the confidence level of every confidence interval
 ALPHA = 0.05
 
 # Valid methods for computing bootstrap confidence intervals
@@ -454,8 +450,6 @@ class ComparisonRow(TypedDict):
     Cliffs_Delta_CI_Low: float
     Cliffs_Delta_CI_High: float
     Effect_Size_Class: EffectSizeClass
-    MW_p_value: float
-    Significant: bool
 
 
 # Logging
@@ -786,23 +780,14 @@ def mannwhitneyu_statistic(
 def cliffs_delta(
     x: npt.NDArray[IntOrFloat],
     y: npt.NDArray[IntOrFloat],
-    u: np.floating | npt.NDArray[np.floating] | None = None,
     axis: int = 0,
 ) -> np.floating | npt.NDArray[np.floating]:
     """
     Return Cliff's delta from samples `x` and `y`.
 
-    If `u`, the Mann–Whitney U statistic, is specified, it can be either:
-    - a scalar (single comparison), or
-    - an array of U values computed along `axis`.
-
-    The output matches the shape of the broadcasted comparisons
-    (i.e., `u` with the comparison axis removed).
+    The output matches the shape of the samples with `axis` removed.
     """
-    if u is None:
-        u = mannwhitneyu_statistic(x, y, axis=axis)
-
-    u = np.asarray(u)
+    u = mannwhitneyu_statistic(x, y, axis=axis)
     nx = x.shape[axis]
     ny = y.shape[axis]
     return (2 * u) / (nx * ny) - 1
@@ -910,19 +895,11 @@ def compare_metric(
 
     # Pass the variant as the first sample so that the sign of Cliff's delta
     # indicates the direction of the difference between variant and baseline.
-    u, p_val = mannwhitneyu(y, x, alternative="two-sided")
-    cliffs_d = float(cliffs_delta(y, x, u))
+    cliffs_d = float(cliffs_delta(y, x))
     cliffs_d_ci = two_sample_bootstrap_ci(
         y, x, cliffs_delta,
         bootstrap_rng(*sample_key, metric, EffectSize.CLIFFS_DELTA),
     )  # fmt: skip
-
-    significant = bool(p_val <= ALPHA)
-    if significant:
-        logger.info(
-            "%s/%s: significant difference detected (p=%.4g, Cliff's Delta=%.3f)",
-            sample_key, metric, p_val, cliffs_d,
-        )  # fmt: skip
 
     row: ComparisonRow = {
         "Program": benchmark,
@@ -940,29 +917,9 @@ def compare_metric(
         "Cliffs_Delta_CI_Low": cliffs_d_ci.low,
         "Cliffs_Delta_CI_High": cliffs_d_ci.high,
         "Effect_Size_Class": classify_effect_size(cliffs_d),
-        "MW_p_value": float(p_val),
-        "Significant": significant,
     }
 
     return row
-
-
-def apply_bh_correction_per_metric(comparison_df: pl.DataFrame) -> pl.DataFrame:
-    """Apply the Benjamini-Hochberg correction to each individual metric of `comparison_df`"""
-
-    def apply_bh_correction(metric_group: pl.DataFrame) -> pl.DataFrame:
-        significant_adjusted, adjusted_p_value, _, _ = multipletests(
-            metric_group["MW_p_value"].to_numpy(),
-            alpha=ALPHA,
-            method="fdr_bh",
-        )
-
-        return metric_group.with_columns(
-            Adjusted_p_value=pl.Series(adjusted_p_value),
-            Significant_Adjusted=pl.Series(significant_adjusted),
-        )
-
-    return comparison_df.group_by("Metric").map_groups(apply_bh_correction)
 
 
 def common_benchmarks(baseline_dir: Path, variant_dir: Path) -> list[str]:
@@ -1015,7 +972,7 @@ def build_comparison_frame(
     variant_dir: Path,
     comparison_rows: list[ComparisonRow],
 ) -> pl.DataFrame | None:
-    """Correct and order the rows of one variant's comparison, or `None` if it has none"""
+    """Order the rows of one variant's comparison, or `None` if it has none"""
     if not comparison_rows:
         logger.warning(
             "Empty comparison result detected for the following directories:\n"
@@ -1025,8 +982,7 @@ def build_comparison_frame(
         )  # fmt: skip
         return None
 
-    comparison_df = apply_bh_correction_per_metric(pl.DataFrame(comparison_rows))
-    return comparison_df.sort(["Program", "Metric", "Variant"])
+    return pl.DataFrame(comparison_rows).sort(["Program", "Metric", "Variant"])
 
 
 def generate_comparisons(root_dir: Path, executor: Executor | None) -> None:
