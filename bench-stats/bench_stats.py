@@ -809,6 +809,8 @@ def two_sample_bootstrap_ci(
     y: npt.NDArray[IntOrFloat],
     statistic: TwoSampleStatistic,
     rng: np.random.Generator,
+    sample_key: SampleKey,
+    metric: str,
     n_resamples: int = 9_999,
 ) -> ConfidenceInterval:
     """Return the bootstrap confidence interval for a custom two-sample statistic."""
@@ -834,7 +836,9 @@ def two_sample_bootstrap_ci(
             return ci
 
         logger.info(
-            "Degenerate data encountered. Falling back to '%s' bootstrap...",
+            "%s/%s: degenerate data encountered. Falling back to '%s' bootstrap...",
+            sample_key,
+            metric,
             FALLBACK_BOOTSTRAP_METHOD,
         )
         # Only BCa's acceleration is undefined for these resamples.
@@ -890,6 +894,7 @@ def compare_metric(
     med_diff_pct_ci = two_sample_bootstrap_ci(
         x, y, median_difference_percent,
         bootstrap_rng(*sample_key, metric, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
+        sample_key, metric,
     )  # fmt: skip
     iqr_x, iqr_y = iqr(x), iqr(y)
 
@@ -899,6 +904,7 @@ def compare_metric(
     cliffs_d_ci = two_sample_bootstrap_ci(
         y, x, cliffs_delta,
         bootstrap_rng(*sample_key, metric, EffectSize.CLIFFS_DELTA),
+        sample_key, metric,
     )  # fmt: skip
 
     row: ComparisonRow = {
