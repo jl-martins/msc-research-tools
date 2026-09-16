@@ -152,7 +152,7 @@ SUMMARY_COLUMNS = IDENTITY_COLUMNS + [
 IDLE_RUN_PREFIX = "idle_"
 
 # File and directory names
-LOG_FILE_NAME = "bench-stats.log"
+LOG_FILE_NAME = "bench_stats.log"
 MEASUREMENTS_FILE_NAME = "measurements.csv"
 SUMMARY_FILE_NAME = "summary.csv"
 COMPARISON_FILE_NAME = "comparison.csv"
