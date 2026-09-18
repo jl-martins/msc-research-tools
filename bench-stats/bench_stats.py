@@ -162,11 +162,14 @@ ALPHA = 0.05
 # Valid methods for computing bootstrap confidence intervals
 type BootstrapMethod = Literal["percentile", "basic", "bca", "BCa"]
 
-# Primary method for computing bootstrap confidence intervals
-PRIMARY_BOOTSTRAP_METHOD: BootstrapMethod = "BCa"
+# Bootstrap method of each statistic
+MEDIAN_DIFFERENCE_BOOTSTRAP_METHOD: BootstrapMethod = "percentile"
+CLIFFS_DELTA_BOOTSTRAP_METHOD: BootstrapMethod = "BCa"
 
-# Fallback bootstrap method for degenerate data
-FALLBACK_BOOTSTRAP_METHOD: BootstrapMethod = "percentile"
+# Fallback bootstrap method of Cliff's delta for degenerate data. The BCa acceleration
+# is undefined for degenerate data. The median-based difference needs no fallback
+# because the percentile method stays defined wherever the statistic itself is.
+CLIFFS_DELTA_FALLBACK_BOOTSTRAP_METHOD: BootstrapMethod = "percentile"
 
 # Root seed of every bootstrap. Each bootstrap derives its generator from this seed
 # and a deterministic sample key, so bootstrapped confidence intervals are deterministic.
@@ -806,9 +809,16 @@ def two_sample_bootstrap_ci(
     rng: np.random.Generator,
     sample_key: SampleKey,
     metric: str,
+    method: BootstrapMethod,
+    fallback_method: BootstrapMethod | None = None,
     n_resamples: int = 9_999,
 ) -> ConfidenceInterval:
-    """Return the bootstrap confidence interval for a custom two-sample statistic."""
+    """
+    Return the bootstrap confidence interval for a custom two-sample statistic.
+
+    A `fallback_method` recomputes the interval from the same resamples when
+    `method` yields a non-finite interval (as BCa does for degenerate data).
+    """
     resample = functools.partial(
         bootstrap,
         data=(x, y),
@@ -824,24 +834,23 @@ def two_sample_bootstrap_ci(
         np.errstate(divide="ignore", invalid="ignore"),
     ):
         warnings.simplefilter("ignore", DegenerateDataWarning)
-        res = resample(n_resamples=n_resamples, method=PRIMARY_BOOTSTRAP_METHOD)
+        res = resample(n_resamples=n_resamples, method=method)
 
         ci = res.confidence_interval
-        if np.isfinite([ci.low, ci.high]).all():
+        if np.isfinite([ci.low, ci.high]).all() or fallback_method is None:
             return ci
 
         logger.info(
             "%s/%s: degenerate data encountered. Falling back to '%s' bootstrap...",
             sample_key,
             metric,
-            FALLBACK_BOOTSTRAP_METHOD,
+            fallback_method,
         )
-        # Only BCa's acceleration is undefined for these resamples.
-        # The resamples themselves are sound, so the bootstrap result can be reused.
+        # The resamples are sound and can be reused.
         res = resample(
             n_resamples=0,
             bootstrap_result=res,
-            method=FALLBACK_BOOTSTRAP_METHOD,
+            method=fallback_method,
         )
 
     return res.confidence_interval
@@ -889,7 +898,7 @@ def compare_metric(
     med_diff_pct_ci = two_sample_bootstrap_ci(
         x, y, median_difference_percent,
         bootstrap_rng(*sample_key, metric, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
-        sample_key, metric,
+        sample_key, metric, MEDIAN_DIFFERENCE_BOOTSTRAP_METHOD,
     )  # fmt: skip
     iqr_x, iqr_y = iqr(x), iqr(y)
 
@@ -900,6 +909,7 @@ def compare_metric(
         y, x, cliffs_delta,
         bootstrap_rng(*sample_key, metric, EffectSize.CLIFFS_DELTA),
         sample_key, metric,
+        CLIFFS_DELTA_BOOTSTRAP_METHOD, CLIFFS_DELTA_FALLBACK_BOOTSTRAP_METHOD,
     )  # fmt: skip
 
     row: ComparisonRow = {
