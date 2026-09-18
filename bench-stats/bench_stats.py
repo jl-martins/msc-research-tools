@@ -18,7 +18,7 @@ and produces the following outputs:
    - A `comparison.csv` comparing each variant with the `loops` baseline.
      Comparisons include:
        - the difference in medians and its bootstrap confidence interval;
-       - Cliff's delta and its bootstrap confidence interval.
+       - Cliff's delta and its confidence interval.
 
 2. Total energy (package + DRAM) statistics, including:
    - Forest plots for each variant in the corresponding JDK directory.
@@ -72,6 +72,7 @@ from scipy.stats import (
     DegenerateDataWarning,
     bootstrap,
     iqr,
+    norm,
     rankdata,
     spearmanr,
 )
@@ -162,14 +163,13 @@ ALPHA = 0.05
 # Valid methods for computing bootstrap confidence intervals
 type BootstrapMethod = Literal["percentile", "basic", "bca", "BCa"]
 
-# Bootstrap method of each statistic
+# Bootstrap methods for effect size confidence intervals.
+# Cliff's delta is not listed here because its confidence intervals
+# are computed with Newcombe's method 5 instead of bootstrap methods.
 MEDIAN_DIFFERENCE_BOOTSTRAP_METHOD: BootstrapMethod = "percentile"
-CLIFFS_DELTA_BOOTSTRAP_METHOD: BootstrapMethod = "BCa"
 
-# Fallback bootstrap method of Cliff's delta for degenerate data. The BCa acceleration
-# is undefined for degenerate data. The median-based difference needs no fallback
-# because the percentile method stays defined wherever the statistic itself is.
-CLIFFS_DELTA_FALLBACK_BOOTSTRAP_METHOD: BootstrapMethod = "percentile"
+# Halvings that place a score interval limit, past the resolution of a 64-bit float
+BISECTIONS = 60
 
 # Root seed of every bootstrap. Each bootstrap derives its generator from this seed
 # and a deterministic sample key, so bootstrapped confidence intervals are deterministic.
@@ -587,12 +587,13 @@ def is_non_baseline_dir(path: Path) -> bool:
     return path.is_dir() and path.name != BASELINE_DIR_NAME
 
 
-def normalize_measurements_columns(measurements_path: Path) -> None:
-    """Add the derived `PackageAndDRAM` column if missing and sort columns per `MEASUREMENTS_SCHEMA`"""
-    columns = pl.scan_csv(measurements_path).collect_schema().names()
-    if columns == MEASUREMENTS_COLUMNS:
-        return
+def read_measurements(measurements_path: Path) -> pl.DataFrame:
+    """
+    Read raw measurements, with columns sorted per `MEASUREMENTS_SCHEMA`.
 
+    Derive the `PackageAndDRAM` column in memory if it's missing.
+    """
+    columns = pl.scan_csv(measurements_path).collect_schema().names()
     schema = (
         MEASUREMENTS_SCHEMA if "PackageAndDRAM" in columns else RAW_MEASUREMENTS_SCHEMA
     )
@@ -602,17 +603,14 @@ def normalize_measurements_columns(measurements_path: Path) -> None:
             (pl.col("Package") + pl.col("DRAM")).alias("PackageAndDRAM")
         )
 
-    tmp_path = measurements_path.with_name(f"{measurements_path.name}.tmp")
-    df.select(MEASUREMENTS_COLUMNS).write_csv(tmp_path)
-    tmp_path.replace(measurements_path)
+    return df.select(MEASUREMENTS_COLUMNS)
 
 
 @functools.lru_cache(maxsize=256)
 def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:
     """Load raw measurements, clean them and return the result as a data frame"""
     try:
-        normalize_measurements_columns(measurements_path)
-        df = pl.read_csv(measurements_path, schema=MEASUREMENTS_SCHEMA)
+        df = read_measurements(measurements_path)
         active_runs_df = df.filter(~pl.col("Program").str.starts_with(IDLE_RUN_PREFIX))
         if active_runs_df.is_empty():
             logger.warning(
@@ -802,6 +800,64 @@ def bootstrap_rng(*identity: str) -> np.random.Generator:
     return np.random.default_rng(seed)
 
 
+def newcombe_score_ci(
+    variant: npt.NDArray[IntOrFloat],
+    baseline: npt.NDArray[IntOrFloat],
+    alpha: float = ALPHA,
+) -> ConfidenceInterval:
+    """
+    Return Newcombe's method 5 interval for Cliff's delta.
+
+    Ports method 5 of Newcombe (2006, part 2), a score interval for the Mann-Whitney
+    parameter `theta`, which is Cliff's delta mapped onto [0, 1]. The variance is the
+    one Hanley and McNeil derived from an exponential model, with the two sample sizes
+    replaced by their average, as method 5 prescribes.
+
+    A Wald interval fixes that variance at the estimate, which leaves no width wherever
+    the samples do not overlap. This method instead solves for the values of `theta`
+    whose own variance places the estimate at the limit of the interval. The limits stay
+    within the bounds of the statistic, and the interval keeps its width at the bounds.
+
+    The equation has no closed form. The estimate always lies within the interval, and
+    a bound of the statistic lies outside it unless the estimate reaches that bound, so
+    each limit is bisected between the two.
+    """
+    z = norm.ppf(1 - alpha / 2)
+    m, n = len(variant), len(baseline)
+    theta = (float(cliffs_delta(variant, baseline)) + 1) / 2
+    size = (m + n) / 2 - 1
+
+    def score(value: float) -> float:
+        """Return what separates `value` from the estimate, at most zero within the interval"""
+        variance = (
+            value
+            * (1 - value)
+            * (1 + size * (1 - value) / (2 - value) + size * value / (1 + value))
+            / (m * n)
+        )
+        return (value - theta) ** 2 - z**2 * variance
+
+    def limit(bound: float) -> float:
+        """
+        Return the limit of the interval between `bound` and the estimate.
+
+        An estimate that reaches `bound` leaves nothing to bisect, and the limit is the
+        bound itself, which is where the interval of such an estimate ends.
+        """
+        outside, inside = bound, theta
+        for _ in range(BISECTIONS):
+            middle = (outside + inside) / 2
+            if score(middle) > 0:
+                outside = middle
+            else:
+                inside = middle
+
+        return (outside + inside) / 2
+
+    # Map the limits back onto the scale of Cliff's delta
+    return ConfidenceInterval(2 * limit(0.0) - 1, 2 * limit(1.0) - 1)
+
+
 def two_sample_bootstrap_ci(
     x: npt.NDArray[IntOrFloat],
     y: npt.NDArray[IntOrFloat],
@@ -905,12 +961,7 @@ def compare_metric(
     # Pass the variant as the first sample so that the sign of Cliff's delta
     # indicates the direction of the difference between variant and baseline.
     cliffs_d = float(cliffs_delta(y, x))
-    cliffs_d_ci = two_sample_bootstrap_ci(
-        y, x, cliffs_delta,
-        bootstrap_rng(*sample_key, metric, EffectSize.CLIFFS_DELTA),
-        sample_key, metric,
-        CLIFFS_DELTA_BOOTSTRAP_METHOD, CLIFFS_DELTA_FALLBACK_BOOTSTRAP_METHOD,
-    )  # fmt: skip
+    cliffs_d_ci = newcombe_score_ci(y, x)
 
     row: ComparisonRow = {
         "Program": benchmark,
