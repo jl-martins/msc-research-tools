@@ -25,7 +25,7 @@ from matplotlib.ticker import FuncFormatter, SymmetricalLogLocator
 
 from effect_sizes import ALPHA, EffectSize, clustered_spearman
 from jobs import Job
-from measurements import JdkVersion, Metric, sort_jdks
+from measurements import JdkVersion, Metric, get_jdk_labels, sort_jdks
 
 logger = logging.getLogger(__name__)
 
@@ -913,7 +913,14 @@ def render_trend_panel(
     ax.set_ylim(ax.get_ylim())
     ax.axhline(0, **ZERO_LINE_STYLE)
 
-    ax.set_xticks(x, labels=list(jdk_labels.values()))
+    # Major versions fit side by side, while names do not
+    labels = list(jdk_labels.values())
+    if all(label.isdigit() for label in labels):
+        ax.set_xticks(x, labels=labels)
+    else:
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha="right", rotation_mode="anchor")
+
     ax.tick_params(labelsize=PANEL_TICK_FONT["size"])
 
 
@@ -995,11 +1002,7 @@ def trend_plot_jobs(
     # the same position in every panel, whichever JDKs a benchmark supports
     jdks = sort_jdks(metric_df.get_column("JDK").unique().to_list(), jdk_versions)
 
-    # Ordered like `jdks`. Each JDK is labeled with its major version,
-    # or with its name if its version is unknown.
-    jdk_labels = {
-        jdk: str(jdk_versions[jdk][0]) if jdk in jdk_versions else jdk for jdk in jdks
-    }
+    jdk_labels = get_jdk_labels(jdks, jdk_versions)
     stem_suffix = f"{underscore(get_metric_label(metric))}_trend_plot"
 
     plot_jobs: dict[TrendPlotJobKey, Job[None]] = {}

@@ -174,6 +174,21 @@ def sort_jdks(jdks: list[str], versions: dict[str, JdkVersion]) -> list[str]:
     )
 
 
+def get_jdk_labels(jdks: list[str], versions: dict[str, JdkVersion]) -> dict[str, str]:
+    """
+    Label each JDK of `jdks`, in the given order.
+
+    Major versions are the shortest labels that a plot can carry, and they name the
+    JDKs of a set whose major versions differ. Any other set is labeled by name, since
+    a major version would then stand for more than one JDK, or for none.
+    """
+    major_version_set = {versions[jdk][0] for jdk in jdks if jdk in versions}
+    if len(major_version_set) < len(jdks):
+        return {jdk: jdk for jdk in jdks}
+
+    return {jdk: str(versions[jdk][0]) for jdk in jdks}
+
+
 # I/O
 def is_non_baseline_dir(path: Path) -> bool:
     """Return `True` if `path` is a directory whose name differs from `BASELINE_DIR_NAME`; `False` otherwise"""

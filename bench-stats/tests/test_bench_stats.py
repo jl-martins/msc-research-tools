@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 
 from effect_sizes import compare_metric, generate_energy_time_correlation_table
-from measurements import SampleKey, parse_jdk_version
+from measurements import SampleKey, get_jdk_labels, parse_jdk_version
 from plots import format_scatter_statistics
 from rank_corr import total_spearman
 
@@ -162,6 +162,29 @@ def test_scatter_statistics_show_only_the_size_when_the_correlation_has_no_inter
 
     assert format_scatter_statistics(scatter_panel(2)) == "$n = 2$"
     assert format_scatter_statistics(perfect) == "$n = 15$"
+
+
+JDK_VERSIONS = {
+    "temurin-17": (17, 0, 18),
+    "temurin-21": (21, 0, 11),
+    "corretto-21": (21, 0, 7),
+    "temurin-25": (25, 0, 3),
+}
+
+
+def test_jdks_are_labelled_by_major_version():
+    labels = get_jdk_labels(["temurin-17", "temurin-21"], JDK_VERSIONS)
+    assert labels == {"temurin-17": "17", "temurin-21": "21"}
+
+
+@pytest.mark.parametrize(
+    "jdks",
+    [["temurin-21", "corretto-21"], ["temurin-17", "mystery"]],
+    ids=["shared-major-version", "unknown-version"],
+)
+def test_jdks_a_major_version_cannot_tell_apart_are_labelled_by_name(jdks):
+    labels = get_jdk_labels(jdks, JDK_VERSIONS)
+    assert labels == {jdk: jdk for jdk in jdks}
 
 
 @pytest.mark.parametrize(
