@@ -53,6 +53,7 @@ from typing import NamedTuple
 import polars as pl
 
 from effect_sizes import (
+    BOOTSTRAP_DEFAULT_N_RESAMPLES,
     IQR_INTERPOLATION_METHOD,
     ComparisonRow,
     build_long_time_and_energy_table,
@@ -219,7 +220,7 @@ def load_comparison_pair(
         return baseline_df, variant_df
 
 
-def compare_benchmark(key: ComparisonJobKey) -> list[ComparisonRow]:
+def compare_benchmark(key: ComparisonJobKey, n_resamples: int) -> list[ComparisonRow]:
     """Compare every metric of one benchmark between a baseline and a variant"""
     comparison_pair = load_comparison_pair(
         key.baseline_dir,
@@ -236,7 +237,7 @@ def compare_benchmark(key: ComparisonJobKey) -> list[ComparisonRow]:
     for metric in METRICS:
         x = baseline_df[metric].drop_nulls().to_numpy()
         y = variant_df[metric].drop_nulls().to_numpy()
-        row = compare_metric(sample_key, metric, x, y)
+        row = compare_metric(sample_key, metric, x, y, n_resamples)
         if row is not None:
             comparison_rows.append(row)
 
@@ -264,6 +265,7 @@ def build_comparison_frame(
 def generate_comparisons(
     root_dir: Path,
     executor: Executor | None,
+    n_resamples: int,
 ) -> tuple[list[pl.DataFrame], int]:
     """
     Compare each benchmark variant with the baseline and store the results in a CSV in the variant's directory.
@@ -302,7 +304,7 @@ def generate_comparisons(
         {
             job_key: (
                 f"comparison of '{job_key.variant_dir / job_key.benchmark}'",
-                functools.partial(compare_benchmark, job_key),
+                functools.partial(compare_benchmark, job_key, n_resamples),
             )
             for job_key in job_keys
         },
@@ -403,6 +405,7 @@ def generate_overall_stats(
 def generate_stats(
     root_dir: Path,
     executor: Executor | None,
+    n_resamples: int,
 ) -> tuple[list[pl.DataFrame], int]:
     """
     Generate benchmark statistics from raw measurements.
@@ -468,7 +471,11 @@ def generate_stats(
     )
 
     # 3. Generate comparative statistics
-    comparisons, n_comparison_failures = generate_comparisons(root_dir, executor)
+    comparisons, n_comparison_failures = generate_comparisons(
+        root_dir,
+        executor,
+        n_resamples,
+    )
 
     # 4. Log completion
     logger.info(
@@ -479,11 +486,16 @@ def generate_stats(
     return comparisons, n_failures
 
 
-def run(root_dir: Path, n_jobs: int) -> int:
+def run(
+    root_dir: Path,
+    n_jobs: int,
+    n_resamples: int = BOOTSTRAP_DEFAULT_N_RESAMPLES,
+) -> int:
     """
     Process every scenario subdirectory of `root_dir` and generate overview statistics.
 
-    Run up to `n_jobs` jobs at once, and return the number of jobs that failed.
+    Run up to `n_jobs` jobs at once, bootstrapping every interval from `n_resamples`
+    resamples, and return the number of jobs that failed.
     """
     if not root_dir.exists():
         logger.error("Root directory '%s' does not exist", root_dir)
@@ -502,6 +514,7 @@ def run(root_dir: Path, n_jobs: int) -> int:
             scenario_comparisons, n_scenario_failures = generate_stats(
                 scenario_dir,
                 executor,
+                n_resamples,
             )
             comparisons += scenario_comparisons
             n_failures += n_scenario_failures
@@ -544,6 +557,12 @@ def main() -> None:
         help="worker processes to spread the statistics and plots over (default: %(default)s)",
     )
     parser.add_argument(
+        "--resamples",
+        type=positive_int,
+        default=BOOTSTRAP_DEFAULT_N_RESAMPLES,
+        help="resamples of every bootstrap confidence interval (default: %(default)s)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="enable debug logging",
@@ -554,7 +573,7 @@ def main() -> None:
     setup_logging(root_dir, args.verbose)
 
     logger.info("Using root directory '%s'", root_dir)
-    n_failures = run(root_dir, args.jobs)
+    n_failures = run(root_dir, args.jobs, args.resamples)
     if n_failures:
         logger.error("%d job(s) failed; see the errors above", n_failures)
         sys.exit(1)

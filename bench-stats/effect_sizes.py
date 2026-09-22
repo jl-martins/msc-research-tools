@@ -37,6 +37,9 @@ type BootstrapMethod = Literal["percentile", "basic", "bca", "BCa"]
 # where the samples stop overlapping, which is why its interval is a score interval.
 MEDIAN_DIFFERENCE_BOOTSTRAP_METHOD: BootstrapMethod = "percentile"
 
+# Default number of resamples per bootstrap.
+BOOTSTRAP_DEFAULT_N_RESAMPLES = 9_999
+
 # Halvings that place a score interval limit, past the resolution of a 64-bit float
 BISECTIONS = 60
 
@@ -240,7 +243,8 @@ def two_sample_bootstrap_ci(
     metric: str,
     method: BootstrapMethod,
     fallback_method: BootstrapMethod | None = None,
-    n_resamples: int = 9_999,
+    *,
+    n_resamples: int,
 ) -> ConfidenceInterval:
     """
     Return the bootstrap confidence interval for a custom two-sample statistic.
@@ -291,6 +295,7 @@ def compare_metric(
     metric: str,
     baseline_values: npt.NDArray[np.float64],
     variant_values: npt.NDArray[np.float64],
+    n_resamples: int = BOOTSTRAP_DEFAULT_N_RESAMPLES,
 ) -> ComparisonRow | None:
     """Compute all comparative statistics for a single metric pair"""
     x = baseline_values
@@ -311,6 +316,7 @@ def compare_metric(
         x, y, median_difference_percent,
         bootstrap_rng(*sample_key, metric, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
         sample_key, metric, MEDIAN_DIFFERENCE_BOOTSTRAP_METHOD,
+        n_resamples=n_resamples,
     )  # fmt: skip
     iqr_x = iqr(x, interpolation=IQR_INTERPOLATION_METHOD)
     iqr_y = iqr(y, interpolation=IQR_INTERPOLATION_METHOD)
