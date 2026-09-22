@@ -50,8 +50,8 @@ import multiprocessing
 import os
 import re
 import warnings
-from collections import defaultdict, namedtuple
-from collections.abc import Callable, Iterator
+from collections import defaultdict
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import contextmanager
 from enum import StrEnum
@@ -68,7 +68,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import polars as pl
-from adjustText import adjust_text
+from adjustText import adjust_text  # type: ignore[import-untyped]
 from inflection import underscore
 from matplotlib.colors import Normalize, SymLogNorm
 from matplotlib.scale import SymmetricalLogTransform
@@ -130,10 +130,7 @@ IDENTITY_COLUMNS_SCHEMA = {
     "Powercap": pl.Utf8,
 }
 
-MEASUREMENTS_SCHEMA = {
-    **IDENTITY_COLUMNS_SCHEMA,
-    **METRICS_SCHEMA,
-}
+MEASUREMENTS_SCHEMA = IDENTITY_COLUMNS_SCHEMA | METRICS_SCHEMA
 
 RAW_MEASUREMENTS_SCHEMA = {
     k: v for k, v in MEASUREMENTS_SCHEMA.items() if k != Metric.PACKAGE_AND_DRAM
@@ -181,9 +178,6 @@ BISECTIONS = 60
 # and a deterministic sample key, so bootstrapped confidence intervals are deterministic.
 ROOT_SEED = 42
 
-# Numeric types
-type IntOrFloat = np.integer | np.floating
-
 # Effect size classes from Romano et al., 2006
 type EffectSizeClass = Literal["negligible", "small", "medium", "large"]
 
@@ -196,8 +190,12 @@ class EffectSize(StrEnum):
     CLIFFS_DELTA = "Cliffs_Delta"
 
 
-# Confidence interval named tuple
-ConfidenceInterval = namedtuple("ConfidenceInterval", ["low", "high"])
+class ConfidenceInterval(NamedTuple):
+    """The lower and upper limits of a confidence interval"""
+
+    low: float
+    high: float
+
 
 # Confidence level (%) corresponding to `ALPHA`, for display purposes
 CI_LEVEL_PERCENT = round((1 - ALPHA) * 100)
@@ -453,12 +451,12 @@ class SampleKey(NamedTuple):
 class TwoSampleStatistic(Protocol):
     def __call__(
         self,
-        x: npt.NDArray[IntOrFloat],
-        y: npt.NDArray[IntOrFloat],
+        x: npt.NDArray[np.floating],
+        y: npt.NDArray[np.floating],
         /,
         *,
         axis: int = 0,
-    ) -> IntOrFloat | npt.NDArray[IntOrFloat]: ...
+    ) -> np.floating | npt.NDArray[np.floating]: ...
 
 
 class ComparisonTask(NamedTuple):
@@ -550,7 +548,7 @@ def worker_pool(jobs: int) -> Iterator[Executor | None]:
 
 
 def run_tasks[R](
-    tasks: list[Callable[[], R]],
+    tasks: Sequence[Callable[[], R]],
     executor: Executor | None,
 ) -> list[R]:
     """Run every task, in this process or spread over `executor`, and return the results in task order"""
@@ -779,8 +777,8 @@ def classify_effect_size(cliffs_d: float) -> EffectSizeClass:
 
 
 def median_difference_percent(
-    x: npt.NDArray[IntOrFloat],
-    y: npt.NDArray[IntOrFloat],
+    x: npt.NDArray[np.floating],
+    y: npt.NDArray[np.floating],
     axis: int = 0,
 ) -> np.floating | npt.NDArray[np.floating]:
     """Return `median(y) - median(x)`, as a percentage of `median(x)."""
@@ -791,8 +789,8 @@ def median_difference_percent(
 
 
 def mannwhitneyu_statistic(
-    x: npt.NDArray[IntOrFloat],
-    y: npt.NDArray[IntOrFloat],
+    x: npt.NDArray[np.floating],
+    y: npt.NDArray[np.floating],
     axis: int = 0,
 ) -> np.floating | npt.NDArray[np.floating]:
     """
@@ -813,8 +811,8 @@ def mannwhitneyu_statistic(
 
 
 def cliffs_delta(
-    x: npt.NDArray[IntOrFloat],
-    y: npt.NDArray[IntOrFloat],
+    x: npt.NDArray[np.floating],
+    y: npt.NDArray[np.floating],
     axis: int = 0,
 ) -> np.floating | npt.NDArray[np.floating]:
     """
@@ -840,8 +838,8 @@ def bootstrap_rng(*identity: str) -> np.random.Generator:
 
 
 def newcombe_score_ci(
-    variant: npt.NDArray[IntOrFloat],
-    baseline: npt.NDArray[IntOrFloat],
+    variant: npt.NDArray[np.floating],
+    baseline: npt.NDArray[np.floating],
     alpha: float = ALPHA,
 ) -> ConfidenceInterval:
     """
@@ -898,8 +896,8 @@ def newcombe_score_ci(
 
 
 def two_sample_bootstrap_ci(
-    x: npt.NDArray[IntOrFloat],
-    y: npt.NDArray[IntOrFloat],
+    x: npt.NDArray[np.floating],
+    y: npt.NDArray[np.floating],
     statistic: TwoSampleStatistic,
     rng: np.random.Generator,
     sample_key: SampleKey,
@@ -933,7 +931,7 @@ def two_sample_bootstrap_ci(
 
         ci = res.confidence_interval
         if np.isfinite([ci.low, ci.high]).all() or fallback_method is None:
-            return ci
+            return ConfidenceInterval(ci.low, ci.high)
 
         logger.info(
             "%s/%s: degenerate data encountered. Falling back to '%s' bootstrap...",
@@ -948,7 +946,8 @@ def two_sample_bootstrap_ci(
             method=fallback_method,
         )
 
-    return res.confidence_interval
+    ci = res.confidence_interval
+    return ConfidenceInterval(ci.low, ci.high)
 
 
 def load_comparison_pair(
@@ -972,8 +971,8 @@ def load_comparison_pair(
 def compare_metric(
     sample_key: SampleKey,
     metric: str,
-    baseline_values: npt.NDArray[IntOrFloat],
-    variant_values: npt.NDArray[IntOrFloat],
+    baseline_values: npt.NDArray[np.float64],
+    variant_values: npt.NDArray[np.float64],
 ) -> ComparisonRow | None:
     """Compute all comparative statistics for a single metric pair"""
     x = baseline_values
