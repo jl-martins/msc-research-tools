@@ -13,6 +13,7 @@ from bench_stats import (
     compare_metric,
     format_scatter_statistics,
     generate_energy_time_correlation_table,
+    parse_jdk_version,
 )
 from rank_corr import total_spearman
 
@@ -165,3 +166,18 @@ def test_scatter_statistics_show_only_the_size_when_the_correlation_has_no_inter
 
     assert format_scatter_statistics(scatter_panel(2)) == "$n = 2$"
     assert format_scatter_statistics(perfect) == "$n = 15$"
+
+
+@pytest.mark.parametrize(
+    ("version_string", "expected"),
+    [
+        ("1.8.0_492", (8, 0, 492)),
+        ("11.0.27", (11, 0, 27)),
+        ("21", (21, 0, 0)),
+        ("25.0.3+9-LTS", (25, 0, 3)),
+    ],
+)
+def test_jdk_version_is_parsed_from_legacy_and_jep_223_version_strings(
+    version_string, expected
+):
+    assert parse_jdk_version(f'openjdk version "{version_string}"') == expected

@@ -536,7 +536,9 @@ def parse_jdk_version(java_version_output: str) -> JdkVersion | None:
         return None
 
     version_string = version_string_match.group(1)
-    version_patterns = (JAVA_VERSION_NUMBER_PATTERN, JAVA_LEGACY_VERSION_NUMBER_PATTERN)
+    # The legacy pattern goes first, since the JEP 223 pattern also matches a legacy
+    # version string. It would read "1.8.0_492" as major 1 instead of major 8.
+    version_patterns = (JAVA_LEGACY_VERSION_NUMBER_PATTERN, JAVA_VERSION_NUMBER_PATTERN)
     version_number_match = next(
         (match for p in version_patterns if (match := p.match(version_string))),
         None,
