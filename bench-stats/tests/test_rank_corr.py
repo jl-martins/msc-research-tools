@@ -238,6 +238,16 @@ def test_observations_with_missing_values_are_dropped(caplog):
     assert result.n_obs == 16
 
 
+def test_integer_and_float_labels_group_the_same_clusters():
+    # `factor` writes a label with `as.character`, which gives 1 and 1.0 one level
+    x, y, cluster = clustered_data(4, [3, 5, 2, 4])
+
+    by_integer = total_spearman(x, y, cluster)
+    by_float = total_spearman(x, y, cluster.astype(float))
+
+    assert by_float == by_integer
+
+
 def test_integer_and_string_labels_group_the_same_clusters():
     x, y, cluster = clustered_data(9, [3, 4, 5, 2, 4])
 

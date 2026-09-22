@@ -34,6 +34,7 @@ thousands of observations but not millions.
 
 import logging
 import math
+from numbers import Number
 from typing import Literal, NamedTuple
 
 import numpy as np
@@ -51,8 +52,9 @@ type Variance = Literal["shih-fay", "rankcorr"]
 # Fewer clusters leave no information about the variation between clusters
 MIN_CLUSTERS = 3
 
-# Significant digits after which R's `factor` still tells two numbers apart
-TIE_SIGNIFICANT_DIGITS = 15
+# How R's `as.character` writes a number, and so how `factor` tells two of them
+# apart: 15 significant digits
+R_NUMBER_FORMAT = ".15g"
 
 
 class ClusteredCorrelation(NamedTuple):
@@ -67,11 +69,25 @@ class ClusteredCorrelation(NamedTuple):
 
 
 def dense_ranks(values: npt.NDArray[np.float64]) -> npt.NDArray[np.intp]:
-    """Rank `values` from 1 without gaps, tying numbers equal to 15 significant digits"""
-    # `rankCorr` ranks with `as.numeric(factor(x))`, which compares numbers by their text
-    # form of 15 significant digits. Rounding the same way reproduces its ties exactly.
-    rounded = [float(f"{value:.{TIE_SIGNIFICANT_DIGITS}g}") for value in values]
+    """Rank `values` from 1 without gaps, tying numbers that `factor` cannot tell apart"""
+    # `rankCorr` ranks with `as.numeric(factor(x))`, which compares numbers by their
+    # text form. Rounding the same way reproduces its ties exactly.
+    rounded = [float(format(value, R_NUMBER_FORMAT)) for value in values]
     return rankdata(rounded, method="dense").astype(np.intp)
+
+
+def cluster_text(labels: npt.NDArray[np.object_]) -> npt.NDArray[np.str_]:
+    """Return the text form of each label, the form `factor` gives the levels of a cluster"""
+    # `rankCorr` groups the observations of a cluster with `factor`, which converts a
+    # label with `as.character`. A label of 1 and one of 1.0 are then one cluster.
+    return np.array(
+        [
+            format(label, R_NUMBER_FORMAT)
+            if isinstance(label, Number) and not isinstance(label, bool)
+            else str(label)
+            for label in labels
+        ]
+    )
 
 
 def midrank_step(ranks: npt.NDArray[np.intp]) -> npt.NDArray[np.float64]:
@@ -224,8 +240,7 @@ def total_spearman(
             labels[~missing],
         )
 
-    # Integer, float, and string labels of the same clusters must group alike
-    clusters, codes = np.unique(labels.astype(str), return_inverse=True)
+    clusters, codes = np.unique(cluster_text(labels), return_inverse=True)
     n_clusters, n_obs = len(clusters), len(x_values)
     if n_clusters < MIN_CLUSTERS:
         raise ValueError(
