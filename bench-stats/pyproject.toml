@@ -22,5 +22,8 @@ dev = [
 [project.scripts]
 bench-stats = "bench_stats:main"
 
+[tool.setuptools]
+py-modules = ["bench_stats", "rank_corr"]
+
 [tool.uv]
 package = true

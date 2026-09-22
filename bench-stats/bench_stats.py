@@ -27,7 +27,10 @@ and produces the following outputs:
 3. Time and total energy correlation consisting of:
    - A Spearman rank-correlation table under `<root>`, quantifying the
      relationship between the percentage changes in median time and total
-     energy relative to the baseline.
+     energy relative to the baseline. A benchmark recurs under every JDK and
+     scenario, so each benchmark counts as one cluster (see `rank_corr`), and
+     the table gives the standard error and confidence interval of each
+     correlation as well as its number of benchmarks.
    - Scatter plots of those changes in each scenario directory.
 
 Bootstrap resampling is deterministically seeded from the resampled data,
@@ -74,8 +77,9 @@ from scipy.stats import (
     iqr,
     norm,
     rankdata,
-    spearmanr,
 )
+
+from rank_corr import ClusteredCorrelation, total_spearman
 
 logger = logging.getLogger(__name__)
 
@@ -1159,14 +1163,41 @@ def build_long_time_and_energy_table(comparison_data: pl.DataFrame) -> pl.DataFr
     return long_df.filter(finite).rename({"Program": "Benchmark"})
 
 
-def spearman_rho(subset: pl.DataFrame) -> float:
-    """Correlate the time and energy differences of `subset` by Spearman's rank coefficient"""
-    return float(
-        spearmanr(
+def clustered_spearman(subset: pl.DataFrame) -> ClusteredCorrelation:
+    """
+    Correlate the time and energy differences of `subset` by Spearman's rank coefficient, allowing for benchmarks
+
+    A benchmark recurs under every JDK and scenario of `subset`, so its rows are not
+    independent, and each benchmark counts as one cluster. Where each benchmark occurs
+    once, as in a scatter plot panel, this is the plain coefficient with an interval.
+    A subset that cannot be correlated gives NaN and a warning, rather than stopping
+    the run.
+    """
+    benchmarks = subset.get_column("Benchmark")
+    try:
+        correlation = total_spearman(
             subset.get_column("Time_Diff_Percent").to_numpy(),
             subset.get_column("Energy_Diff_Percent").to_numpy(),
-        ).statistic
-    )
+            benchmarks.to_numpy(),
+            confidence=1 - ALPHA,
+        )
+    except ValueError as error:
+        logger.warning(
+            "Skipped the correlation of %d rows of %d benchmarks: %s",
+            len(subset),
+            benchmarks.n_unique(),
+            error,
+        )
+        return ClusteredCorrelation(
+            math.nan, math.nan, math.nan, math.nan, benchmarks.n_unique(), len(subset)
+        )
+    if not math.isfinite(correlation.estimate):
+        logger.warning(
+            "Skipped the correlation of %d rows of %d benchmarks: time or energy is constant",
+            len(subset),
+            correlation.n_clusters,
+        )
+    return correlation
 
 
 def spearman_row(
@@ -1175,16 +1206,21 @@ def spearman_row(
     subset: pl.DataFrame,
 ) -> dict[str, Any]:
     """Compute one row of the energy-time correlation table"""
+    correlation = clustered_spearman(subset)
     return {
         "Variant": variant,
         "Scenario": scenario,
         "N": len(subset),
-        "Spearman_Rho": spearman_rho(subset),
+        "Spearman_Rho": correlation.estimate,
+        "Program_Count": correlation.n_clusters,
+        "Spearman_Rho_SE": correlation.se,
+        "Spearman_Rho_CI_Low": correlation.low,
+        "Spearman_Rho_CI_High": correlation.high,
     }
 
 
 def generate_energy_time_correlation_table(long_df: pl.DataFrame) -> pl.DataFrame:
-    """Compute the Spearman correlation between Time_Diff_Percent and Energy_Diff_Percent, per variant and scenario"""
+    """Compute the clustered Spearman correlation between Time_Diff_Percent and Energy_Diff_Percent, per variant and scenario"""
     rows = []
     for variant in sorted(long_df.get_column("Variant").unique()):
         variant_df = long_df.filter(pl.col("Variant") == variant)
@@ -1643,6 +1679,20 @@ def compute_scatter_panel_limits(
     )
 
 
+def format_scatter_statistics(panel_df: pl.DataFrame) -> str:
+    """Format the correlation of `panel_df`"""
+    correlation = clustered_spearman(panel_df)
+    size = f"$n = {len(panel_df)}$"
+    values = (correlation.estimate, correlation.low, correlation.high)
+    if any(not np.isfinite(v) for v in values):
+        return size
+
+    return (
+        f"$\\rho = {correlation.estimate:.2f}$ "
+        f"[{correlation.low:.2f}, {correlation.high:.2f}]\n{size}"
+    )
+
+
 def render_energy_time_scatter_panel(
     ax: plt.Axes,
     panel_df: pl.DataFrame,
@@ -1671,7 +1721,7 @@ def render_energy_time_scatter_panel(
 
     ax.text(
         *SCATTER_PLOT_STAT_POSITION,
-        f"$\\rho = {spearman_rho(panel_df):.2f}$\n$n = {len(panel_df)}$",
+        format_scatter_statistics(panel_df),
         transform=ax.transAxes, ha="left", va="top", **SCATTER_PLOT_STAT_FONT,
     )  # fmt: skip
 
