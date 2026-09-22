@@ -8,7 +8,7 @@ import logging
 import math
 import warnings
 from enum import StrEnum
-from typing import Any, Literal, NamedTuple, Protocol, TypedDict
+from typing import Any, Final, Literal, NamedTuple, Protocol, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 # One minus the confidence level of every confidence interval
 ALPHA = 0.05
+
+# How every IQR interpolates between order statistics. Summaries and comparisons
+# share it, so both report the same IQR of a sample.
+IQR_INTERPOLATION_METHOD: Final = "linear"
 
 # Valid methods for computing bootstrap confidence intervals
 type BootstrapMethod = Literal["percentile", "basic", "bca", "BCa"]
@@ -308,7 +312,8 @@ def compare_metric(
         bootstrap_rng(*sample_key, metric, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
         sample_key, metric, MEDIAN_DIFFERENCE_BOOTSTRAP_METHOD,
     )  # fmt: skip
-    iqr_x, iqr_y = iqr(x), iqr(y)
+    iqr_x = iqr(x, interpolation=IQR_INTERPOLATION_METHOD)
+    iqr_y = iqr(y, interpolation=IQR_INTERPOLATION_METHOD)
 
     # Pass the variant as the first sample so that the sign of Cliff's delta
     # indicates the direction of the difference between variant and baseline.

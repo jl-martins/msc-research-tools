@@ -155,6 +155,23 @@ def test_a_benchmark_with_unexpected_columns_is_left_out(tree: Path, caplog):
     assert sorted(comparison.get_column("Program").unique()) == ["beta", "gamma"]
 
 
+def test_summaries_and_comparisons_report_the_same_iqr(tree: Path):
+    run(tree, jobs=1)
+
+    for jdk in JDKS:
+        jdk_dir = tree / SCENARIO / jdk
+        comparison = pl.read_csv(jdk_dir / "streams" / "comparison.csv")
+        for row in comparison.iter_rows(named=True):
+            iqr_column = f"{row['Metric']}_IQR"
+            for implementation, compared in (
+                ("loops", "Loops_IQR"),
+                ("streams", "Variant_IQR"),
+            ):
+                summary_path = jdk_dir / implementation / row["Program"] / "summary.csv"
+                summary = pl.read_csv(summary_path)
+                assert summary.get_column(iqr_column)[0] == pytest.approx(row[compared])
+
+
 def test_a_second_run_writes_the_same_results(tree: Path):
     run(tree, jobs=1)
     first = csv_outputs(tree)

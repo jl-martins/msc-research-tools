@@ -57,6 +57,7 @@ from typing import NamedTuple
 import polars as pl
 
 from effect_sizes import (
+    IQR_INTERPOLATION_METHOD,
     ComparisonRow,
     build_long_time_and_energy_table,
     compare_metric,
@@ -196,8 +197,8 @@ def generate_benchmark_summary(measurements_path: Path) -> Path | None:
     try:
         aggs = []
         for metric in METRICS:
-            p25 = pl.col(metric).quantile(0.25)
-            p75 = pl.col(metric).quantile(0.75)
+            p25 = pl.col(metric).quantile(0.25, interpolation=IQR_INTERPOLATION_METHOD)
+            p75 = pl.col(metric).quantile(0.75, interpolation=IQR_INTERPOLATION_METHOD)
             aggs.extend(
                 [
                     pl.col(metric).median().alias(f"{metric}_Median"),
