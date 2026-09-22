@@ -1,15 +1,24 @@
 """End-to-end tests of bench-stats on a small tree of measurements"""
 
+import logging
 from pathlib import Path
 
 import numpy as np
+import polars as pl
 import pytest
 
 from bench_stats import run
+from measurements import load_and_clean_measurements
 
 HEADER = [
     "Language", "Program", "Powercap", "Package", "Core",
     "Uncore", "DRAM", "Time", "Temperature", "Memory",
+]  # fmt: skip
+
+# The header of `HEADER` with `Package` and `Time` swapped
+SWAPPED_HEADER = [
+    "Language", "Program", "Powercap", "Time", "Core",
+    "Uncore", "DRAM", "Package", "Temperature", "Memory",
 ]  # fmt: skip
 
 SCENARIO = "cold"
@@ -112,6 +121,38 @@ def test_every_output_is_written(tree: Path):
         "streams_energy_trend_plot",
     ):
         assert (scenario_dir / f"{stem}.pgf").exists()
+
+
+@pytest.mark.parametrize(
+    ("header", "extra"),
+    [(SWAPPED_HEADER, {}), (HEADER + ["Extra"], {"Extra": 0})],
+    ids=["reordered", "extra-column"],
+)
+def test_measurements_with_unexpected_columns_are_refused(
+    tmp_path: Path, caplog, header: list[str], extra: dict[str, object]
+):
+    path = tmp_path / "measurements.csv"
+    rows = measurement_rows(np.random.default_rng(0), "alpha", 1.0)
+    write_measurements(path, [row | extra for row in rows], header)
+
+    with caplog.at_level(logging.ERROR):
+        assert load_and_clean_measurements(path) is None
+
+    assert "Unexpected columns" in caplog.text
+
+
+def test_a_benchmark_with_unexpected_columns_is_left_out(tree: Path, caplog):
+    jdk_dir = tree / SCENARIO / "temurin-17"
+    rows = measurement_rows(np.random.default_rng(1), "alpha", 1.0)
+    write_measurements(jdk_dir / "loops/alpha/measurements.csv", rows, SWAPPED_HEADER)
+
+    with caplog.at_level(logging.ERROR):
+        run(tree, jobs=1)
+
+    comparison = pl.read_csv(jdk_dir / "streams" / "comparison.csv")
+    assert "Unexpected columns" in caplog.text
+    assert not (jdk_dir / "loops/alpha/summary.csv").exists()
+    assert sorted(comparison.get_column("Program").unique()) == ["beta", "gamma"]
 
 
 def test_a_second_run_writes_the_same_results(tree: Path):

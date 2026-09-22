@@ -191,6 +191,16 @@ def read_measurements(measurements_path: Path) -> pl.DataFrame:
     schema = (
         MEASUREMENTS_SCHEMA if "PackageAndDRAM" in columns else RAW_MEASUREMENTS_SCHEMA
     )
+
+    # `schema` names the columns by position and ignores the header,
+    # so a header in any other order would mislabel them silently
+    expected = [str(column) for column in schema]
+    if columns != expected:
+        raise ValueError(
+            f"Unexpected columns in '{measurements_path}': "
+            f"expected {expected}, found {columns}"
+        )
+
     df = pl.read_csv(measurements_path, schema=schema)
     if "PackageAndDRAM" not in df.columns:
         df = df.with_columns(
@@ -225,7 +235,7 @@ def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:
 
         return active_runs_df
 
-    except OSError, pl.exceptions.PolarsError:
+    except OSError, ValueError, pl.exceptions.PolarsError:
         logger.exception("Error when reading or cleaning '%s'", measurements_path)
         return None
 
