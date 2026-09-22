@@ -186,8 +186,12 @@ def run_tasks[R](
 
 
 # Summarization
-def generate_benchmark_summary(measurements_path: Path) -> Path | None:
-    """Summarize raw measurements and store the result in a CSV"""
+def generate_benchmark_summary(measurements_path: Path) -> pl.DataFrame | None:
+    """Summarize raw measurements, store the result in a CSV and return it"""
+    summary_path = measurements_path.parent / SUMMARY_FILE_NAME
+    # Remove any stale summary, so none survives even if this one cannot be written
+    summary_path.unlink(missing_ok=True)
+
     active_runs_df = load_and_clean_measurements(measurements_path)
     if active_runs_df is None or active_runs_df.is_empty():
         logger.warning("Skipping empty data frame from '%s'...", measurements_path)
@@ -231,33 +235,30 @@ def generate_benchmark_summary(measurements_path: Path) -> Path | None:
                 )
 
         summary_df = summary_df.select(SUMMARY_COLUMNS)
-        summary_path = measurements_path.parent / SUMMARY_FILE_NAME
         summary_df.write_csv(summary_path)
         logger.info("Created summary '%s'", summary_path)
-        return summary_path
+        return summary_df
 
     except OSError, ValueError, pl.exceptions.PolarsError:
         logger.exception("Failed to create summary for %s", measurements_path)
         return None
 
 
-def generate_combined_summary(implementation_dir: Path) -> None:
-    """Combine all individual benchmark summaries within an implementation directory into a single file"""
-    try:
-        summary_files: list[Path] = [
-            d / SUMMARY_FILE_NAME
-            for d in sorted(implementation_dir.iterdir())
-            if d.is_dir() and (d / SUMMARY_FILE_NAME).exists()
-        ]
+def generate_combined_summary(
+    implementation_dir: Path,
+    summaries: list[pl.DataFrame],
+) -> None:
+    """Combine the benchmark summaries of an implementation directory into a single file"""
+    output_path = implementation_dir / SUMMARY_FILE_NAME
+    # Remove any stale summary, so none survives even if this one cannot be written
+    output_path.unlink(missing_ok=True)
 
-        if not summary_files:
-            logger.error("No summary files were found in '%s'", implementation_dir)
+    try:
+        if not summaries:
+            logger.error("No summaries were made in '%s'", implementation_dir)
             return
 
-        summary_dfs = [pl.read_csv(f) for f in summary_files]
-        combined_df = pl.concat(summary_dfs, how="vertical")
-
-        output_path = implementation_dir / SUMMARY_FILE_NAME
+        combined_df = pl.concat(summaries, how="vertical")
         combined_df.write_csv(output_path)
         logger.info("Created combined summary '%s'", output_path)
 
@@ -327,8 +328,15 @@ def build_comparison_frame(
     return pl.DataFrame(comparison_rows).sort(["Program", "Metric", "Variant"])
 
 
-def generate_comparisons(root_dir: Path, executor: Executor | None) -> None:
-    """Compare each benchmark variant with the baseline and store the results in a CSV in the variant's directory"""
+def generate_comparisons(
+    root_dir: Path,
+    executor: Executor | None,
+) -> list[pl.DataFrame]:
+    """
+    Compare each benchmark variant with the baseline and store the results in a CSV in the variant's directory.
+
+    Return the comparison of each variant, tagged with its scenario and JDK.
+    """
     variant_pairs: list[tuple[Path, Path]] = []
     tasks: list[ComparisonTask] = []
     for jdk_dir in sorted(filter(Path.is_dir, root_dir.iterdir())):
@@ -364,8 +372,13 @@ def generate_comparisons(root_dir: Path, executor: Executor | None) -> None:
     for task, comparison_rows in zip(tasks, task_rows, strict=True):
         rows_by_variant[task.variant_dir] += comparison_rows
 
+    comparisons: list[pl.DataFrame] = []
     plot_tasks: list[Callable[[], None]] = []
     for baseline_dir, variant_dir in variant_pairs:
+        comparison_path = variant_dir / COMPARISON_FILE_NAME
+        # Remove any stale comparison, so none survives even if this one cannot be written
+        comparison_path.unlink(missing_ok=True)
+
         result_df = build_comparison_frame(
             baseline_dir,
             variant_dir,
@@ -374,9 +387,14 @@ def generate_comparisons(root_dir: Path, executor: Executor | None) -> None:
         if result_df is None:
             continue
 
-        comparison_path = variant_dir / COMPARISON_FILE_NAME
         result_df.write_csv(comparison_path)
         logger.info("Created statistical comparison '%s'", comparison_path)
+        comparisons.append(
+            result_df.with_columns(
+                Scenario=pl.lit(root_dir.name),
+                JDK=pl.lit(variant_dir.parent.name),
+            )
+        )
 
         plot_tasks += [
             functools.partial(
@@ -390,45 +408,29 @@ def generate_comparisons(root_dir: Path, executor: Executor | None) -> None:
         ]
 
     run_tasks(plot_tasks, executor)
+    return comparisons
 
 
 # Cross-Scenario Overview Statistics
-def collect_comparison_data(scenario_dirs: list[Path]) -> pl.DataFrame:
-    """Concatenate all comparison CSVs and tag them with Scenario and JDK columns"""
-    frames = []
-    for scenario_dir in scenario_dirs:
-        for jdk_dir in sorted(filter(Path.is_dir, scenario_dir.iterdir())):
-            for variant_dir in sorted(filter(is_non_baseline_dir, jdk_dir.iterdir())):
-                comparison_path = variant_dir / COMPARISON_FILE_NAME
-                if not comparison_path.exists():
-                    logger.warning("Missing '%s'; skipping", comparison_path)
-                    continue
+def overall_plot_tasks(
+    root_dir: Path,
+    scenario_dirs: list[Path],
+    comparisons: list[pl.DataFrame],
+) -> list[Callable[[], None]]:
+    """Return the list of tasks responsible for producing overview statistics"""
+    correlation_path = root_dir / ENERGY_TIME_CORRELATION_FILE_NAME
+    # Remove any stale table, so none survives even if this one cannot be written
+    correlation_path.unlink(missing_ok=True)
 
-                df = pl.read_csv(comparison_path).with_columns(
-                    Scenario=pl.lit(scenario_dir.name),
-                    JDK=pl.lit(jdk_dir.name),
-                )
-                frames.append(df)
-
-    if not frames:
+    plot_tasks: list[Callable[[], None]] = []
+    if not comparisons:
         logger.error(
             "No comparison data found across %s",
             [d.name for d in scenario_dirs],
         )
-        return pl.DataFrame()
-
-    return pl.concat(frames, how="vertical")
-
-
-def overall_plot_tasks(
-    root_dir: Path,
-    scenario_dirs: list[Path],
-) -> list[Callable[[], None]]:
-    """Return the list of tasks responsible for producing overview statistics"""
-    plot_tasks: list[Callable[[], None]] = []
-    comparison_data = collect_comparison_data(scenario_dirs)
-    if comparison_data.is_empty():
         return plot_tasks
+
+    comparison_data = pl.concat(comparisons, how="vertical")
 
     jdk_versions = collect_jdk_versions(scenario_dirs)
     for metric, effect_size in HEATMAPS:
@@ -464,7 +466,6 @@ def overall_plot_tasks(
         return plot_tasks
 
     correlation_df = generate_energy_time_correlation_table(long_df)
-    correlation_path = root_dir / ENERGY_TIME_CORRELATION_FILE_NAME
     correlation_df.write_csv(correlation_path)
     logger.info("Created energy-time correlation table '%s'", correlation_path)
 
@@ -474,30 +475,39 @@ def overall_plot_tasks(
 def generate_overall_stats(
     root_dir: Path,
     scenario_dirs: list[Path],
+    comparisons: list[pl.DataFrame],
     executor: Executor | None,
 ) -> None:
-    """Generate overview statistics"""
-    run_tasks(overall_plot_tasks(root_dir, scenario_dirs), executor)
+    """Generate overview statistics from the comparisons of every scenario"""
+    run_tasks(overall_plot_tasks(root_dir, scenario_dirs, comparisons), executor)
 
 
 # Orchestration
-def generate_stats(root_dir: Path, executor: Executor | None) -> None:
-    """Generate benchmark statistics from raw measurements"""
+def generate_stats(root_dir: Path, executor: Executor | None) -> list[pl.DataFrame]:
+    """
+    Generate benchmark statistics from raw measurements.
+
+    Return the comparison of each variant, tagged with its scenario and JDK.
+    """
     if not root_dir.exists():
         logger.error("Root directory '%s' does not exist", root_dir)
-        return
+        return []
 
     logger.info("Processing root directory '%s'...", root_dir)
 
     # 1. Generate individual benchmark summaries
-    measurement_files = list(root_dir.rglob(MEASUREMENTS_FILE_NAME))
+    measurement_files = sorted(root_dir.rglob(MEASUREMENTS_FILE_NAME))
     logger.info("Found %d %s files", len(measurement_files), MEASUREMENTS_FILE_NAME)
 
+    summaries: dict[Path, list[pl.DataFrame]] = defaultdict(list)
     for measurements_path in measurement_files:
         try:
             relative_parts = measurements_path.relative_to(root_dir).parts
             if len(relative_parts) == 4:
-                generate_benchmark_summary(measurements_path)
+                summary = generate_benchmark_summary(measurements_path)
+                if summary is not None:
+                    implementation_dir = measurements_path.parent.parent
+                    summaries[implementation_dir].append(summary)
             else:
                 logger.warning(
                     "Skipping '%s' because it does not match the expected "
@@ -511,20 +521,17 @@ def generate_stats(root_dir: Path, executor: Executor | None) -> None:
     # 2. Concatenate benchmark summaries per implementation (loops, sequential streams or parallel streams)
     for jdk_dir in sorted(d for d in root_dir.iterdir() if d.is_dir()):
         for implementation_dir in sorted(d for d in jdk_dir.iterdir() if d.is_dir()):
-            generate_combined_summary(implementation_dir)
+            generate_combined_summary(implementation_dir, summaries[implementation_dir])
 
     # 3. Generate comparative statistics
-    generate_comparisons(root_dir, executor)
+    comparisons = generate_comparisons(root_dir, executor)
 
     # 4. Log completion
     logger.info(
         "Processing complete. Processed %d measurement files.",
         len(measurement_files),
     )
-    logger.debug(
-        "Measurement cache stats: %s",
-        load_and_clean_measurements.cache_info(),
-    )
+    return comparisons
 
 
 def run(root_dir: Path, jobs: int) -> None:
@@ -540,10 +547,12 @@ def run(root_dir: Path, jobs: int) -> None:
         [d.name for d in scenario_dirs], jobs, "" if jobs == 1 else "es",
     )  # fmt: skip
     with worker_pool(jobs) as executor:
-        for scenario_dir in scenario_dirs:
-            generate_stats(scenario_dir, executor)
-
-        generate_overall_stats(root_dir, scenario_dirs, executor)
+        comparisons = [
+            comparison
+            for scenario_dir in scenario_dirs
+            for comparison in generate_stats(scenario_dir, executor)
+        ]
+        generate_overall_stats(root_dir, scenario_dirs, comparisons, executor)
 
 
 def positive_int(value: str) -> int:

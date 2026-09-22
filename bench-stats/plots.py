@@ -257,6 +257,11 @@ def export_plot(fig: plt.Figure, output_dir: Path, stem: str, description: str) 
     logger.info("Created %s '%s'", description, pgf_path)
 
 
+def remove_plot(output_dir: Path, stem: str) -> None:
+    """Remove the PGF file named `stem` from `output_dir`, if it exists"""
+    (output_dir / f"{stem}.pgf").unlink(missing_ok=True)
+
+
 # Effect Size Heatmaps
 def format_estimate_with_ci(
     estimate: float,
@@ -586,6 +591,9 @@ def generate_forest_plot(
 ) -> None:
     """Generate a forest plot for the specified variant directory, metric and effect size"""
     metric_label = get_metric_label(metric)
+    stem = f"{underscore(metric_label)}_{underscore(effect_size)}_forest_plot"
+    # Remove any stale plot, so none survives even if this one cannot be drawn
+    remove_plot(variant_dir, stem)
 
     plot_df = prepare_forest_plot_data(comparison_df, metric, effect_size)
     if plot_df.is_empty():
@@ -596,7 +604,6 @@ def generate_forest_plot(
         return
 
     fig = render_forest_plot(plot_df, effect_size)
-    stem = f"{underscore(metric_label)}_{underscore(effect_size)}_forest_plot"
     try:
         export_plot(fig, variant_dir, stem, "forest plot")
     finally:

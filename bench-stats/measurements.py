@@ -2,7 +2,6 @@
 Layout, reading and cleaning of the benchmark measurements, and the JDK versions they were taken on.
 """
 
-import functools
 import logging
 import re
 from enum import StrEnum
@@ -210,7 +209,6 @@ def read_measurements(measurements_path: Path) -> pl.DataFrame:
     return df.select(MEASUREMENTS_COLUMNS)
 
 
-@functools.lru_cache(maxsize=256)
 def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:
     """Load raw measurements, clean them and return the result as a data frame"""
     try:

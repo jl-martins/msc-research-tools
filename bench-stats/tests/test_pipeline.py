@@ -84,6 +84,12 @@ def build_tree(root: Path, header: list[str] = HEADER) -> Path:
     return root
 
 
+def write_invalid_measurements(path: Path) -> None:
+    """Write measurements to `path` under a header that bench-stats refuses"""
+    rows = measurement_rows(np.random.default_rng(1), path.parent.name, 1.0)
+    write_measurements(path, rows, SWAPPED_HEADER)
+
+
 def csv_outputs(root: Path) -> dict[str, bytes]:
     """Return the content of every CSV that bench-stats wrote, by relative path"""
     return {
@@ -143,8 +149,7 @@ def test_measurements_with_unexpected_columns_are_refused(
 
 def test_a_benchmark_with_unexpected_columns_is_left_out(tree: Path, caplog):
     jdk_dir = tree / SCENARIO / "temurin-17"
-    rows = measurement_rows(np.random.default_rng(1), "alpha", 1.0)
-    write_measurements(jdk_dir / "loops/alpha/measurements.csv", rows, SWAPPED_HEADER)
+    write_invalid_measurements(jdk_dir / "loops/alpha/measurements.csv")
 
     with caplog.at_level(logging.ERROR):
         run(tree, jobs=1)
@@ -170,6 +175,43 @@ def test_summaries_and_comparisons_report_the_same_iqr(tree: Path):
                 summary_path = jdk_dir / implementation / row["Program"] / "summary.csv"
                 summary = pl.read_csv(summary_path)
                 assert summary.get_column(iqr_column)[0] == pytest.approx(row[compared])
+
+
+def test_stale_comparison_is_removed(tree: Path):
+    run(tree, jobs=1)
+    streams_dir = tree / SCENARIO / "temurin-17" / "streams"
+    for benchmark in BENCHMARKS:
+        write_invalid_measurements(streams_dir / benchmark / "measurements.csv")
+
+    run(tree, jobs=1)
+
+    correlation = pl.read_csv(tree / "energy_time_correlation.csv")
+    assert not (streams_dir / "comparison.csv").exists()
+    assert correlation.get_column("N").to_list() == [3, 3]
+
+
+def test_stale_summary_is_removed(tree: Path):
+    run(tree, jobs=1)
+    loops_dir = tree / SCENARIO / "temurin-17" / "loops"
+    write_invalid_measurements(loops_dir / "alpha" / "measurements.csv")
+
+    run(tree, jobs=1)
+
+    combined = pl.read_csv(loops_dir / "summary.csv")
+    assert not (loops_dir / "alpha" / "summary.csv").exists()
+    assert combined.get_column("Program").to_list() == ["beta", "gamma"]
+
+
+def test_stale_correlation_table_is_removed(tree: Path):
+    run(tree, jobs=1)
+    for jdk in JDKS:
+        for benchmark in BENCHMARKS:
+            streams_dir = tree / SCENARIO / jdk / "streams"
+            write_invalid_measurements(streams_dir / benchmark / "measurements.csv")
+
+    run(tree, jobs=1)
+
+    assert not (tree / "energy_time_correlation.csv").exists()
 
 
 def test_a_second_run_writes_the_same_results(tree: Path):
