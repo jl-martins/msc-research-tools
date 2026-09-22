@@ -5,7 +5,6 @@ Forest plots, heatmaps, scatter plots and trend plots of the comparisons, export
 import functools
 import logging
 import math
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -25,6 +24,7 @@ from matplotlib.scale import SymmetricalLogTransform
 from matplotlib.ticker import FuncFormatter, SymmetricalLogLocator
 
 from effect_sizes import ALPHA, EffectSize, clustered_spearman
+from jobs import Job
 from measurements import JdkVersion, Metric, sort_jdks
 
 logger = logging.getLogger(__name__)
@@ -452,6 +452,51 @@ def generate_effect_size_heatmaps(
             plt.close(fig)
 
 
+class HeatmapJobKey(NamedTuple):
+    """Identifies the job that draws the effect size heatmaps of a scenario"""
+
+    scenario_dir: Path
+    metric: Metric
+    effect_size: EffectSize
+
+
+def effect_size_heatmap_jobs(
+    root_dir: Path,
+    comparison_data: pl.DataFrame,
+    jdk_versions: dict[str, JdkVersion],
+) -> dict[HeatmapJobKey, Job[None]]:
+    """Return the jobs that draw the effect size heatmaps of each scenario"""
+    plot_jobs: dict[HeatmapJobKey, Job[None]] = {}
+    for metric, effect_size in HEATMAPS:
+        # Built from every scenario, so that all the heatmaps of a
+        # metric share a color scale and stay comparable with each other
+        norm = build_effect_size_norm(comparison_data, metric, effect_size)
+        if norm is None:
+            logger.warning(
+                "No %s comparisons found; skipping the %s heatmaps",
+                metric, effect_size,
+            )  # fmt: skip
+            continue
+
+        plot_jobs |= {
+            HeatmapJobKey(root_dir / scenario, metric, effect_size): (
+                f"{metric} {effect_size} heatmaps of '{root_dir / scenario}'",
+                functools.partial(
+                    generate_effect_size_heatmaps,
+                    root_dir / scenario,
+                    comparison_data.filter(pl.col("Scenario") == scenario),
+                    metric,
+                    effect_size,
+                    norm,
+                    jdk_versions,
+                ),
+            )
+            for scenario in sorted(comparison_data.get_column("Scenario").unique())
+        }
+
+    return plot_jobs
+
+
 # Forest Plots
 def prepare_forest_plot_data(
     comparison_df: pl.DataFrame,
@@ -608,6 +653,34 @@ def generate_forest_plot(
         export_plot(fig, variant_dir, stem, "forest plot")
     finally:
         plt.close(fig)
+
+
+class ForestPlotJobKey(NamedTuple):
+    """Identifies the job that draws a forest plot of a variant"""
+
+    variant_dir: Path
+    metric: Metric
+    effect_size: EffectSize
+
+
+def forest_plot_jobs(
+    variant_dir: Path,
+    comparison_df: pl.DataFrame,
+) -> dict[ForestPlotJobKey, Job[None]]:
+    """Return the jobs that draw each forest plot of a variant"""
+    return {
+        ForestPlotJobKey(variant_dir, metric, effect_size): (
+            f"{metric} forest plot of '{variant_dir}'",
+            functools.partial(
+                generate_forest_plot,
+                variant_dir,
+                comparison_df,
+                metric,
+                effect_size,
+            ),
+        )
+        for metric, effect_size in FOREST_PLOTS
+    }
 
 
 # Energy-Time Scatter Plot
@@ -768,12 +841,19 @@ def generate_energy_time_scatter_plot(
         plt.close(fig)
 
 
-def energy_time_scatter_plot_tasks(
+class ScatterPlotJobKey(NamedTuple):
+    """Identifies the job that draws the energy-time scatter plot of a variant"""
+
+    scenario_dir: Path
+    variant: str
+
+
+def energy_time_scatter_plot_jobs(
     root_dir: Path,
     long_df: pl.DataFrame,
     jdk_versions: dict[str, JdkVersion],
-) -> list[Callable[[], None]]:
-    """Return an energy-time scatter plot for each variant and scenario"""
+) -> dict[ScatterPlotJobKey, Job[None]]:
+    """Return the jobs that draw an energy-time scatter plot of each variant and scenario"""
     # Computed once from both metrics of every variant and scenario, so that
     # all the scatter plots share axis limits and stay comparable with each other.
     limits = compute_scatter_panel_limits(
@@ -781,24 +861,27 @@ def energy_time_scatter_plot_tasks(
         long_df.get_column("Energy_Diff_Percent").to_numpy(),
     )
 
-    plot_tasks: list[Callable[[], None]] = []
+    plot_jobs: dict[ScatterPlotJobKey, Job[None]] = {}
     for variant in sorted(long_df.get_column("Variant").unique()):
         variant_df = long_df.filter(pl.col("Variant") == variant)
         jdks = sort_jdks(variant_df.get_column("JDK").unique().to_list(), jdk_versions)
 
-        plot_tasks += [
-            functools.partial(
-                generate_energy_time_scatter_plot,
-                root_dir / scenario,
-                variant_df.filter(pl.col("Scenario") == scenario),
-                jdks,
-                limits,
-                f"{variant}_energy_time_scatter_plot",
+        plot_jobs |= {
+            ScatterPlotJobKey(root_dir / scenario, variant): (
+                f"{variant} energy-time scatter plot of '{root_dir / scenario}'",
+                functools.partial(
+                    generate_energy_time_scatter_plot,
+                    root_dir / scenario,
+                    variant_df.filter(pl.col("Scenario") == scenario),
+                    jdks,
+                    limits,
+                    f"{variant}_energy_time_scatter_plot",
+                ),
             )
             for scenario in sorted(variant_df.get_column("Scenario").unique())
-        ]
+        }
 
-    return plot_tasks
+    return plot_jobs
 
 
 # Trend Plot
@@ -886,13 +969,21 @@ def generate_trend_plot(
         plt.close(fig)
 
 
-def trend_plot_tasks(
+class TrendPlotJobKey(NamedTuple):
+    """Identifies the job that draws a trend plot of a variant"""
+
+    scenario_dir: Path
+    variant: str
+    metric: Metric
+
+
+def trend_plot_jobs(
     root_dir: Path,
     comparison_data: pl.DataFrame,
     metric: Metric,
     jdk_versions: dict[str, JdkVersion],
-) -> list[Callable[[], None]]:
-    """Return a trend plot of a metric for each variant and scenario"""
+) -> dict[TrendPlotJobKey, Job[None]]:
+    """Return the jobs that draw a trend plot of a metric for each variant and scenario"""
     metric_df = comparison_data.filter(
         (pl.col("Metric") == metric)
         & pl.all_horizontal(
@@ -911,19 +1002,22 @@ def trend_plot_tasks(
     }
     stem_suffix = f"{underscore(get_metric_label(metric))}_trend_plot"
 
-    plot_tasks: list[Callable[[], None]] = []
+    plot_jobs: dict[TrendPlotJobKey, Job[None]] = {}
     for variant in sorted(metric_df.get_column("Variant").unique()):
         variant_df = metric_df.filter(pl.col("Variant") == variant)
-        plot_tasks += [
-            functools.partial(
-                generate_trend_plot,
-                root_dir / scenario,
-                variant_df.filter(pl.col("Scenario") == scenario),
-                metric,
-                jdk_labels,
-                f"{variant}_{stem_suffix}",
+        plot_jobs |= {
+            TrendPlotJobKey(root_dir / scenario, variant, metric): (
+                f"{variant} {metric} trend plot of '{root_dir / scenario}'",
+                functools.partial(
+                    generate_trend_plot,
+                    root_dir / scenario,
+                    variant_df.filter(pl.col("Scenario") == scenario),
+                    metric,
+                    jdk_labels,
+                    f"{variant}_{stem_suffix}",
+                ),
             )
             for scenario in sorted(variant_df.get_column("Scenario").unique())
-        ]
+        }
 
-    return plot_tasks
+    return plot_jobs

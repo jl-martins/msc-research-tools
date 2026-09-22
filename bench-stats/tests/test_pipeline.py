@@ -7,6 +7,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+import plots
 from bench_stats import run
 from measurements import load_and_clean_measurements
 
@@ -105,7 +106,7 @@ def tree(tmp_path: Path) -> Path:
 
 
 def test_every_output_is_written(tree: Path):
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
 
     scenario_dir = tree / SCENARIO
     for jdk in JDKS:
@@ -152,7 +153,7 @@ def test_a_benchmark_with_unexpected_columns_is_left_out(tree: Path, caplog):
     write_invalid_measurements(jdk_dir / "loops/alpha/measurements.csv")
 
     with caplog.at_level(logging.ERROR):
-        run(tree, jobs=1)
+        run(tree, n_jobs=1)
 
     comparison = pl.read_csv(jdk_dir / "streams" / "comparison.csv")
     assert "Unexpected columns" in caplog.text
@@ -161,7 +162,7 @@ def test_a_benchmark_with_unexpected_columns_is_left_out(tree: Path, caplog):
 
 
 def test_summaries_and_comparisons_report_the_same_iqr(tree: Path):
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
 
     for jdk in JDKS:
         jdk_dir = tree / SCENARIO / jdk
@@ -178,12 +179,12 @@ def test_summaries_and_comparisons_report_the_same_iqr(tree: Path):
 
 
 def test_stale_comparison_is_removed(tree: Path):
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
     streams_dir = tree / SCENARIO / "temurin-17" / "streams"
     for benchmark in BENCHMARKS:
         write_invalid_measurements(streams_dir / benchmark / "measurements.csv")
 
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
 
     correlation = pl.read_csv(tree / "energy_time_correlation.csv")
     assert not (streams_dir / "comparison.csv").exists()
@@ -191,11 +192,11 @@ def test_stale_comparison_is_removed(tree: Path):
 
 
 def test_stale_summary_is_removed(tree: Path):
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
     loops_dir = tree / SCENARIO / "temurin-17" / "loops"
     write_invalid_measurements(loops_dir / "alpha" / "measurements.csv")
 
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
 
     combined = pl.read_csv(loops_dir / "summary.csv")
     assert not (loops_dir / "alpha" / "summary.csv").exists()
@@ -203,20 +204,47 @@ def test_stale_summary_is_removed(tree: Path):
 
 
 def test_stale_correlation_table_is_removed(tree: Path):
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
     for jdk in JDKS:
         for benchmark in BENCHMARKS:
             streams_dir = tree / SCENARIO / jdk / "streams"
             write_invalid_measurements(streams_dir / benchmark / "measurements.csv")
 
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
 
     assert not (tree / "energy_time_correlation.csv").exists()
 
 
+def test_run_survives_a_failed_job(tree: Path, caplog, monkeypatch):
+    def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("no forest plot today")
+
+    monkeypatch.setattr(plots, "generate_forest_plot", fail)
+
+    with caplog.at_level(logging.ERROR):
+        n_failures = run(tree, n_jobs=1)
+
+    # One forest plot job per JDK, and the rest of the run goes on
+    assert n_failures == len(JDKS)
+    assert "Failed: PackageAndDRAM forest plot" in caplog.text
+    assert (tree / "energy_time_correlation.csv").exists()
+    for jdk in JDKS:
+        assert (tree / SCENARIO / jdk / "streams" / "comparison.csv").exists()
+
+
+def test_two_concurrent_jobs_write_same_results_as_one(tree: Path, tmp_path: Path):
+    run(tree, n_jobs=1)
+    expected = csv_outputs(tree)
+    other_tree = build_tree(tmp_path / "parallel")
+
+    run(other_tree, n_jobs=2)
+
+    assert csv_outputs(other_tree) == expected
+
+
 def test_a_second_run_writes_the_same_results(tree: Path):
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
     first = csv_outputs(tree)
 
-    run(tree, jobs=1)
+    run(tree, n_jobs=1)
     assert csv_outputs(tree) == first

@@ -26,6 +26,7 @@ bench-stats = "bench_stats:main"
 py-modules = [
     "bench_stats",
     "effect_sizes",
+    "jobs",
     "measurements",
     "plots",
     "rank_corr",
