@@ -280,7 +280,7 @@ HEATMAP_MISSING_COLOR = "#DDDDDD"
 HEATMAP_LINEAR_THRESHOLD = 10.0
 
 # Size of a single heatmap cell and of the margins reserved for
-# the axis labels, the title and the colorbar, all in inches.
+# the axis labels and the colorbar, all in inches.
 HEATMAP_CELL_WIDTH_INCHES = 1.5
 HEATMAP_CELL_HEIGHT_INCHES = 0.55
 HEATMAP_HORIZONTAL_MARGIN_INCHES = 2.5
@@ -307,10 +307,9 @@ HEATMAPS: tuple[tuple[Metric, EffectSize], ...] = (
 # Marker color for scatter points
 SCATTER_PLOT_MARKER_COLOR = FOREST_PLOT_MARKER_COLOR
 
-# Fonts for the figure title, panel titles, axis ticks, per-point benchmark labels
-# and per-panel correlation annotation. Matplotlib's defaults are sized for a figure
+# Fonts for the panel titles, axis ticks, per-point benchmark labels and
+# per-panel correlation annotation. Matplotlib's defaults are sized for a figure
 # far larger than one of these panels, so all of them are set explicitly.
-SCATTER_PLOT_SUPTITLE_FONT: dict[str, Any] = {"size": 11}
 SCATTER_PLOT_TITLE_FONT: dict[str, Any] = {"size": 9}
 SCATTER_PLOT_TICK_FONT: dict[str, Any] = {"size": 7}
 SCATTER_PLOT_LABEL_FONT: dict[str, Any] = {"size": 6}
@@ -334,8 +333,8 @@ SCATTER_PLOT_LINEAR_SCALE = 1.0
 # narrow to hold a labeled point per benchmark, so they wrap over several rows.
 SCATTER_PLOT_COLUMNS = 2
 
-# Size of a single panel and of the margins reserved for the axis labels and the
-# figure title, all in inches. The figure grows with the number of panels. Scaling
+# Size of a single panel and of the margins reserved for the axis labels,
+# all in inches. The figure grows with the number of panels. Scaling
 # it to a given page is left to whatever includes it.
 SCATTER_PLOT_PANEL_WIDTH_INCHES = 2.9
 SCATTER_PLOT_PANEL_HEIGHT_INCHES = 2.7
@@ -382,8 +381,8 @@ TREND_PLOT_COLUMNS = 3
 # The figure has this width, so it fits the page without rescaling.
 TREND_PLOT_WIDTH_INCHES = 6.27
 
-# Height of a single panel and of the margin reserved for the figure title and axis
-# labels, all in inches. Six rows of panels still fit the text height of an A4 page.
+# Height of a single panel and of the margin reserved for the axis labels,
+# all in inches. Six rows of panels still fit the text height of an A4 page.
 TREND_PLOT_PANEL_HEIGHT_INCHES = 1.4
 TREND_PLOT_VERTICAL_MARGIN_INCHES = 0.9
 
@@ -1141,7 +1140,6 @@ def generate_comparisons(root_dir: Path, executor: Executor | None) -> None:
         plot_tasks += [
             functools.partial(
                 generate_forest_plot,
-                variant_dir.parent,
                 variant_dir,
                 result_df,
                 metric,
@@ -1301,7 +1299,6 @@ def overall_plot_tasks(
             functools.partial(
                 generate_effect_size_heatmaps,
                 root_dir / scenario,
-                scenario,
                 comparison_data.filter(pl.col("Scenario") == scenario),
                 metric,
                 effect_size,
@@ -1458,7 +1455,6 @@ def render_effect_size_heatmap(
     data: HeatmapData,
     effect_size: EffectSize,
     norm: Normalize,
-    title: str,
 ) -> plt.Figure:
     """Render a heatmap of the effect sizes in `data`, annotated with their bootstrap CIs"""
     style = EFFECT_SIZE_STYLES[effect_size]
@@ -1484,7 +1480,6 @@ def render_effect_size_heatmap(
     ax.set_yticks(np.arange(rows) + 0.5, labels=data.benchmarks)
     ax.set_ylabel("Benchmark")
     ax.invert_yaxis()
-    ax.set_title(title)
 
     colorbar = fig.colorbar(mesh, ax=ax)
     assert colorbar.solids is not None
@@ -1509,7 +1504,6 @@ def render_effect_size_heatmap(
 
 def generate_effect_size_heatmaps(
     output_dir: Path,
-    scenario: str,
     comparison_data: pl.DataFrame,
     metric: Metric,
     effect_size: EffectSize,
@@ -1521,8 +1515,7 @@ def generate_effect_size_heatmaps(
     heatmaps = prepare_heatmap_data(comparison_data, metric, effect_size, jdk_versions)
 
     for variant, data in heatmaps.items():
-        title = f"{scenario} / {variant} — {metric_label}"
-        fig = render_effect_size_heatmap(data, effect_size, norm, title)
+        fig = render_effect_size_heatmap(data, effect_size, norm)
         stem = f"{variant}_{underscore(metric_label)}_{underscore(effect_size)}_heatmap"
         try:
             export_plot(fig, output_dir, stem, "heatmap")
@@ -1564,7 +1557,6 @@ def draw_forest_plot_graph(
     ax: plt.Axes,
     plot_df: pl.DataFrame,
     style: EffectSizeStyle,
-    title: str,
 ) -> None:
     """Draw the graphical area of a forest plot"""
     programs = plot_df.get_column("Program").to_list()
@@ -1591,8 +1583,6 @@ def draw_forest_plot_graph(
     ax.set_yticks(y)
     ax.set_ylabel("Benchmark")
     ax.set_yticklabels(programs)
-
-    ax.set_title(title)
 
 
 def draw_forest_plot_table(
@@ -1635,7 +1625,6 @@ def draw_forest_plot_table(
 def render_forest_plot(
     plot_df: pl.DataFrame,
     effect_size: EffectSize,
-    title: str,
 ) -> plt.Figure:
     """Render a forest plot of `plot_df` with boostrap CI whiskers"""
     style = EFFECT_SIZE_STYLES[effect_size]
@@ -1654,7 +1643,7 @@ def render_forest_plot(
         for yi in range(0, n, 2):
             axes.axhspan(yi - 0.5, yi + 0.5, color="black", alpha=0.04, zorder=0)
 
-    draw_forest_plot_graph(ax, plot_df, style, title)
+    draw_forest_plot_graph(ax, plot_df, style)
     draw_forest_plot_table(ax_labels, plot_df, style)
 
     # Set last, and on one Axes only: `sharey` propagates it, and it has to
@@ -1666,7 +1655,6 @@ def render_forest_plot(
 
 
 def generate_forest_plot(
-    jdk_dir: Path,
     variant_dir: Path,
     comparison_df: pl.DataFrame,
     metric: Metric,
@@ -1674,7 +1662,6 @@ def generate_forest_plot(
 ) -> None:
     """Generate a forest plot for the specified variant directory, metric and effect size"""
     metric_label = get_metric_label(metric)
-    title = f"{jdk_dir.name} / {variant_dir.name} — {metric_label}"
 
     plot_df = prepare_forest_plot_data(comparison_df, metric, effect_size)
     if plot_df.is_empty():
@@ -1684,7 +1671,7 @@ def generate_forest_plot(
         )  # fmt: skip
         return
 
-    fig = render_forest_plot(plot_df, effect_size, title)
+    fig = render_forest_plot(plot_df, effect_size)
     stem = f"{underscore(metric_label)}_{underscore(effect_size)}_forest_plot"
     try:
         export_plot(fig, variant_dir, stem, "forest plot")
@@ -1774,7 +1761,6 @@ def render_energy_time_scatter_panel(
 
 def render_energy_time_scatter_grid(
     scenario_df: pl.DataFrame,
-    scenario: str,
     jdks: list[str],
     limits: tuple[float, float],
 ) -> plt.Figure:
@@ -1820,7 +1806,6 @@ def render_energy_time_scatter_grid(
 
     # Make it clear that the panels use a symlog scale
     suffix = f"\n(logarithmic beyond ±{SCATTER_PLOT_LINEAR_THRESHOLD:g})"
-    fig.suptitle(scenario.capitalize(), **SCATTER_PLOT_SUPTITLE_FONT)
     fig.supxlabel(f"$\\Delta$time (%){suffix}", ma="center", **SCATTER_PLOT_TITLE_FONT)
     fig.supylabel(
         f"$\\Delta$energy (%){suffix}", ma="center", **SCATTER_PLOT_TITLE_FONT
@@ -1842,13 +1827,12 @@ def render_energy_time_scatter_grid(
 def generate_energy_time_scatter_plot(
     output_dir: Path,
     scenario_df: pl.DataFrame,
-    scenario: str,
     jdks: list[str],
     limits: tuple[float, float],
     stem: str,
 ) -> None:
     """Generate one scenario's grid of energy-time scatter panels"""
-    fig = render_energy_time_scatter_grid(scenario_df, scenario, jdks, limits)
+    fig = render_energy_time_scatter_grid(scenario_df, jdks, limits)
     try:
         export_plot(fig, output_dir, stem, "energy-time scatter plot")
     finally:
@@ -1878,7 +1862,6 @@ def energy_time_scatter_plot_tasks(
                 generate_energy_time_scatter_plot,
                 root_dir / scenario,
                 variant_df.filter(pl.col("Scenario") == scenario),
-                scenario,
                 jdks,
                 limits,
                 f"{variant}_energy_time_scatter_plot",
@@ -1924,7 +1907,6 @@ def render_trend_panel(
 
 def render_trend_grid(
     scenario_df: pl.DataFrame,
-    scenario: str,
     metric: Metric,
     jdk_labels: dict[str, str],
 ) -> plt.Figure:
@@ -1950,7 +1932,6 @@ def render_trend_grid(
     for ax in flat_axes[len(benchmarks) :]:
         ax.set_axis_off()
 
-    fig.suptitle(scenario.capitalize(), **SCATTER_PLOT_SUPTITLE_FONT)
     fig.supxlabel("Java version", **SCATTER_PLOT_TITLE_FONT)
     fig.supylabel(
         f"$\\Delta${get_metric_label(metric).lower()} (%)\n"
@@ -1964,13 +1945,12 @@ def render_trend_grid(
 def generate_trend_plot(
     output_dir: Path,
     scenario_df: pl.DataFrame,
-    scenario: str,
     metric: Metric,
     jdk_labels: dict[str, str],
     stem: str,
 ) -> None:
     """Generate one scenario's grid of trend panels of a metric"""
-    fig = render_trend_grid(scenario_df, scenario, metric, jdk_labels)
+    fig = render_trend_grid(scenario_df, metric, jdk_labels)
     try:
         export_plot(fig, output_dir, stem, "trend plot")
     finally:
@@ -2010,7 +1990,6 @@ def trend_plot_tasks(
                 generate_trend_plot,
                 root_dir / scenario,
                 variant_df.filter(pl.col("Scenario") == scenario),
-                scenario,
                 metric,
                 jdk_labels,
                 f"{variant}_{stem_suffix}",
