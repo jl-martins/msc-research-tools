@@ -23,6 +23,8 @@ and produces the following outputs:
 2. Total energy (package + DRAM) statistics, including:
    - Forest plots for each variant in the corresponding JDK directory.
    - Scenario-level heatmaps in the corresponding scenario directory.
+   - Line plots of the change(s) in each benchmark across JDK versions, in
+     each scenario directory.
 
 3. Time and total energy correlation consisting of:
    - A Spearman rank-correlation table under `<root>`, quantifying the
@@ -369,6 +371,38 @@ SCATTER_PLOT_STAT_POSITION = (0.04, 0.96)
 
 # Names every scenario at once, in the energy-time correlation table
 ENERGY_TIME_CORRELATION_ALL_LABEL = "All"
+
+
+# Trend plot configuration
+
+# Number of columns the benchmark panels are laid out over
+TREND_PLOT_COLUMNS = 3
+
+# Width of the text block of an A4 page (8.27 in) with 1 in margins.
+# The figure has this width, so it fits the page without rescaling.
+TREND_PLOT_WIDTH_INCHES = 6.27
+
+# Height of a single panel and of the margin reserved for the figure title and axis
+# labels, all in inches. Six rows of panels still fit the text height of an A4 page.
+TREND_PLOT_PANEL_HEIGHT_INCHES = 1.4
+TREND_PLOT_VERTICAL_MARGIN_INCHES = 0.9
+
+# Color of the estimate line and of its confidence band
+TREND_PLOT_LINE_COLOR = FOREST_PLOT_MARKER_COLOR
+TREND_PLOT_BAND_ALPHA = 0.25
+
+# Effect size drawn by every trend plot
+TREND_PLOT_EFFECT_SIZE = EffectSize.MEDIAN_DIFFERENCE_PERCENT
+
+# Columns that must be finite for a comparison to be drawn in a trend plot
+TREND_PLOT_FINITE_COLUMNS = (
+    TREND_PLOT_EFFECT_SIZE,
+    f"{TREND_PLOT_EFFECT_SIZE}_CI_Low",
+    f"{TREND_PLOT_EFFECT_SIZE}_CI_High",
+)
+
+# Which metrics to render a trend plot of for every variant and scenario
+TREND_PLOTS: tuple[Metric, ...] = (Metric.PACKAGE_AND_DRAM,)
 
 # JDK versions
 
@@ -1277,6 +1311,9 @@ def overall_plot_tasks(
             for scenario in sorted(comparison_data.get_column("Scenario").unique())
         ]
 
+    for metric in TREND_PLOTS:
+        plot_tasks += trend_plot_tasks(root_dir, comparison_data, metric, jdk_versions)
+
     long_df = build_long_time_and_energy_table(comparison_data)
     if long_df.is_empty():
         logger.warning("No energy-time data found; skipping energy-time correlation")
@@ -1845,6 +1882,138 @@ def energy_time_scatter_plot_tasks(
                 jdks,
                 limits,
                 f"{variant}_energy_time_scatter_plot",
+            )
+            for scenario in sorted(variant_df.get_column("Scenario").unique())
+        ]
+
+    return plot_tasks
+
+
+# Trend Plot
+def render_trend_panel(
+    ax: plt.Axes,
+    benchmark_df: pl.DataFrame,
+    jdk_labels: dict[str, str],
+) -> None:
+    """Draw one benchmark panel of a trend plot, with its confidence band"""
+    # Aligned to the sorted JDKs, so that a missing JDK becomes a gap in the line
+    panel_df = pl.DataFrame({"JDK": list(jdk_labels)}).join(
+        benchmark_df, on="JDK", how="left", maintain_order="left"
+    )
+    x = np.arange(len(jdk_labels))
+    estimates, ci_low, ci_high = (
+        panel_df.get_column(column).to_numpy() for column in TREND_PLOT_FINITE_COLUMNS
+    )
+
+    ax.fill_between(
+        x, ci_low, ci_high,
+        color=TREND_PLOT_LINE_COLOR, alpha=TREND_PLOT_BAND_ALPHA, linewidth=0,
+    )  # fmt: skip
+
+    # Markers keep a point visible when gaps surround it
+    ax.plot(x, estimates, color=TREND_PLOT_LINE_COLOR, marker="o", markersize=3)
+
+    # Limits are frozen before drawing the zero line, so that the panel fits its data.
+    # The line then only shows when zero lies within that range.
+    ax.set_ylim(ax.get_ylim())
+    ax.axhline(0, **SCATTER_PLOT_ZERO_LINE_STYLE)
+
+    ax.set_xticks(x, labels=list(jdk_labels.values()))
+    ax.tick_params(labelsize=SCATTER_PLOT_TICK_FONT["size"])
+
+
+def render_trend_grid(
+    scenario_df: pl.DataFrame,
+    scenario: str,
+    metric: Metric,
+    jdk_labels: dict[str, str],
+) -> plt.Figure:
+    """Render one scenario's grid of trend panels of a metric, one per benchmark"""
+    benchmarks = sorted(scenario_df.get_column("Program").unique())
+    rows = math.ceil(len(benchmarks) / TREND_PLOT_COLUMNS)
+    fig, axes = plt.subplots(
+        rows, TREND_PLOT_COLUMNS,
+        figsize=(
+            TREND_PLOT_WIDTH_INCHES,
+            rows * TREND_PLOT_PANEL_HEIGHT_INCHES + TREND_PLOT_VERTICAL_MARGIN_INCHES,
+        ),
+        squeeze=False,
+    )  # fmt: skip
+
+    flat_axes: list[Axes] = list(axes.flat)
+    for ax, benchmark in zip(flat_axes, benchmarks, strict=False):
+        benchmark_df = scenario_df.filter(pl.col("Program") == benchmark)
+        render_trend_panel(ax, benchmark_df, jdk_labels)
+        ax.set_title(benchmark, **SCATTER_PLOT_TITLE_FONT)
+
+    # The panels fill whole rows, so the grid can end with empty slots
+    for ax in flat_axes[len(benchmarks) :]:
+        ax.set_axis_off()
+
+    fig.suptitle(scenario.capitalize(), **SCATTER_PLOT_SUPTITLE_FONT)
+    fig.supxlabel("Java version", **SCATTER_PLOT_TITLE_FONT)
+    fig.supylabel(
+        f"$\\Delta${get_metric_label(metric).lower()} (%)\n"
+        f"(shaded: {CI_LEVEL_PERCENT}% CI)",
+        ma="center", **SCATTER_PLOT_TITLE_FONT,
+    )  # fmt: skip
+    fig.tight_layout()
+    return fig
+
+
+def generate_trend_plot(
+    output_dir: Path,
+    scenario_df: pl.DataFrame,
+    scenario: str,
+    metric: Metric,
+    jdk_labels: dict[str, str],
+    stem: str,
+) -> None:
+    """Generate one scenario's grid of trend panels of a metric"""
+    fig = render_trend_grid(scenario_df, scenario, metric, jdk_labels)
+    try:
+        export_plot(fig, output_dir, stem, "trend plot")
+    finally:
+        plt.close(fig)
+
+
+def trend_plot_tasks(
+    root_dir: Path,
+    comparison_data: pl.DataFrame,
+    metric: Metric,
+    jdk_versions: dict[str, JdkVersion],
+) -> list[Callable[[], None]]:
+    """Return a trend plot of a metric for each variant and scenario"""
+    metric_df = comparison_data.filter(
+        (pl.col("Metric") == metric)
+        & pl.all_horizontal(
+            pl.col(TREND_PLOT_FINITE_COLUMNS).is_finite().fill_null(False)
+        )
+    )
+
+    # Sorted once for every trend plot of the metric, so each JDK has
+    # the same position in every panel, whichever JDKs a benchmark supports
+    jdks = sort_jdks(metric_df.get_column("JDK").unique().to_list(), jdk_versions)
+
+    # Ordered like `jdks`. Each JDK is labeled with its major version,
+    # or with its name if its version is unknown.
+    jdk_labels = {
+        jdk: str(jdk_versions[jdk][0]) if jdk in jdk_versions else jdk for jdk in jdks
+    }
+    stem_suffix = f"{underscore(get_metric_label(metric))}_trend_plot"
+
+    plot_tasks: list[Callable[[], None]] = []
+    for variant in sorted(metric_df.get_column("Variant").unique()):
+        variant_df = metric_df.filter(pl.col("Variant") == variant)
+        plot_tasks += [
+            functools.partial(
+                generate_trend_plot,
+                root_dir / scenario,
+                variant_df.filter(pl.col("Scenario") == scenario),
+                scenario,
+                metric,
+                jdk_labels,
+                f"{variant}_{stem_suffix}",
             )
             for scenario in sorted(variant_df.get_column("Scenario").unique())
         ]
