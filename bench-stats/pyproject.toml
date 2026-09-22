@@ -23,7 +23,13 @@ dev = [
 bench-stats = "bench_stats:main"
 
 [tool.setuptools]
-py-modules = ["bench_stats", "rank_corr"]
+py-modules = [
+    "bench_stats",
+    "effect_sizes",
+    "measurements",
+    "plots",
+    "rank_corr",
+]
 
 [tool.uv]
 package = true

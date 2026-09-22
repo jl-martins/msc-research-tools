@@ -8,13 +8,9 @@ import numpy as np
 import polars as pl
 import pytest
 
-from bench_stats import (
-    SampleKey,
-    compare_metric,
-    format_scatter_statistics,
-    generate_energy_time_correlation_table,
-    parse_jdk_version,
-)
+from effect_sizes import compare_metric, generate_energy_time_correlation_table
+from measurements import SampleKey, parse_jdk_version
+from plots import format_scatter_statistics
 from rank_corr import total_spearman
 
 KEY = SampleKey("cold", "temurin-21", "streams", "fop")
