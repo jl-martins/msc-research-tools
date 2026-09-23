@@ -8,7 +8,9 @@ for clustered data:
 
 * The estimate is the Pearson correlation of the midrank-adjusted empirical distribution
   functions of both variables, each observation weighted so that every cluster counts equally
-  (Shih and Fay, 2017, Section 3.3). It equals the `Total` estimate of `rankCorrCluster` in the
+  (Shih and Fay, 2017, Section 3.3). This is Spearman's rank correlation because a midrank is
+  an affine rescaling of its empirical distribution function and Pearson correlation is
+  invariant to affine rescaling. It equals the `Total` estimate of `rankCorrCluster` in the
   R package `rankCorr` (Tu, Li and Shepherd, 2025), which the tests check against.
 * The standard error is the first-order asymptotic variance of Shih and Fay (2017, Theorem 1).
   It uses the residual kernel of their Eq. 10, averaged within clusters (Lemma 2), with the
@@ -18,7 +20,10 @@ for clustered data:
   evaluates two integrals of that kernel with unweighted averages. The two coincide when the
   clusters have equal size.
 * The interval is a Wald interval on the Fisher scale, or on the raw scale, with a normal
-  reference, exactly as in `rankCorr`.
+  reference, as Tu, Li and Shepherd (2025, Section 6) describe and `rankCorr` implements.
+  The Fisher scale keeps the interval within [-1, 1], which a raw-scale interval need not
+  when the estimate is close to a boundary. Shih and Fay (2017, Section 4) instead use a
+  raw-scale interval with a Student's t reference.
 
 References:
 
@@ -51,6 +56,11 @@ type Variance = Literal["shih-fay", "rankcorr"]
 
 # Fewer clusters leave no information about the variation between clusters
 MIN_CLUSTERS = 3
+
+# Tu, Li and Shepherd (2025, Section 7.1) find that their total correlation estimator, which
+# coincides with this module's, needs at least this many clusters for its confidence interval
+# to reach good coverage
+COVERAGE_VALIDATED_CLUSTERS = 10
 
 # How R's `as.character` writes a number, and so how `factor` tells two of them
 # apart: 15 significant digits
@@ -245,6 +255,14 @@ def total_spearman(
     if n_clusters < MIN_CLUSTERS:
         raise ValueError(
             f"At least {MIN_CLUSTERS} clusters are needed, got {n_clusters}"
+        )
+    if n_clusters < COVERAGE_VALIDATED_CLUSTERS:
+        logger.warning(
+            "Only %d clusters. Tu, Li and Shepherd (2025, Section 7.1) found that their total "
+            "correlation estimator needs at least %d for its confidence interval to reach good "
+            "coverage",
+            n_clusters,
+            COVERAGE_VALIDATED_CLUSTERS,
         )
 
     ranks_x, ranks_y = dense_ranks(x_values), dense_ranks(y_values)
