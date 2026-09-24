@@ -184,7 +184,7 @@ class EffectSizeStyle(NamedTuple):
 
 EFFECT_SIZE_STYLES: dict[EffectSize, EffectSizeStyle] = {
     EffectSize.MEDIAN_DIFFERENCE_PERCENT: EffectSizeStyle(
-        label="Relative median change (%)",
+        label="$\Delta_{\mathrm{med}}(\%)$",
         precision=1,
     ),
     EffectSize.CLIFFS_DELTA: EffectSizeStyle(
