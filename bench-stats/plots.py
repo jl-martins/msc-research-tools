@@ -101,16 +101,23 @@ def apply_style() -> None:
     })  # fmt: skip
 
 
-# Human-readable names for the metrics that get plotted.
-# Omitted metric keys default to their value from the `Metric` enum.
-METRIC_LABELS: dict[Metric, str] = {
-    Metric.PACKAGE_AND_DRAM: "Energy",
+class MetricMetadata(NamedTuple):
+    """Human-readable metadata for a metric that gets plotted"""
+
+    name: str
+    symbol: str
+
+
+METRIC_METADATA: dict[Metric, MetricMetadata] = {
+    Metric.PACKAGE_AND_DRAM: MetricMetadata(name="Energy", symbol="E"),
+    Metric.TIME: MetricMetadata(name="Time", symbol="T"),
 }
 
 
-def get_metric_label(metric: Metric) -> str:
-    """Return the human-readable label for `metric`"""
-    return METRIC_LABELS.get(metric, str(metric))
+def get_metric_metadata(metric: Metric) -> MetricMetadata:
+    """Return the metadata of `metric`"""
+    metadata = METRIC_METADATA.get(metric, None)
+    return metadata or MetricMetadata(str(metric), rf"\mathrm{{{metric}}}")
 
 
 # Confidence level (%) corresponding to `ALPHA`, for display purposes
@@ -173,7 +180,7 @@ FOREST_PLOT_MARKER_SIZE = 4
 class EffectSizeStyle(NamedTuple):
     """How to format an effect size measure"""
 
-    label: str
+    label_fmt: str
     # Decimal places for both the estimate and the CI bounds.
     precision: int
     # Fixed column width used only by the forest plot's monospace, right-aligned value table.
@@ -184,11 +191,11 @@ class EffectSizeStyle(NamedTuple):
 
 EFFECT_SIZE_STYLES: dict[EffectSize, EffectSizeStyle] = {
     EffectSize.MEDIAN_DIFFERENCE_PERCENT: EffectSizeStyle(
-        label="$\Delta_{\mathrm{med}}(\%)$",
+        label_fmt=r"$\Delta {symbol}_{{\mathrm{{med}}}}(\%)$",
         precision=1,
     ),
     EffectSize.CLIFFS_DELTA: EffectSizeStyle(
-        label="Cliff's $\\delta$",
+        label_fmt=r"$\delta_{{{symbol}}}$",
         precision=3,
         limits=(-1.05, 1.05),
     ),
@@ -368,7 +375,7 @@ def prepare_heatmap_data(
     jdk_versions: dict[str, JdkVersion],
 ) -> dict[str, HeatmapData]:
     """Prepare the data of an effect size heatmap of a metric, for each variant"""
-    style = EFFECT_SIZE_STYLES[effect_size]
+    effect_size_style = EFFECT_SIZE_STYLES[effect_size]
     metric_df = comparison_data.filter(pl.col("Metric") == metric)
 
     heatmaps: dict[str, HeatmapData] = {}
@@ -388,7 +395,7 @@ def prepare_heatmap_data(
                 row[effect_size],
                 row[f"{effect_size}_CI_Low"],
                 row[f"{effect_size}_CI_High"],
-                style,
+                effect_size_style,
             )
             if not annotation:
                 continue
@@ -454,12 +461,13 @@ def draw_heatmap_annotations(
 
 def render_effect_size_heatmap(
     data: HeatmapData,
+    metric_metadata: MetricMetadata,
     effect_size: EffectSize,
     norm: Normalize,
 ) -> plt.Figure:
     """Render a heatmap of the effect sizes in `data`, annotated with their bootstrap CIs"""
     apply_style()
-    style = EFFECT_SIZE_STYLES[effect_size]
+    effect_size_style = EFFECT_SIZE_STYLES[effect_size]
     rows, columns = data.estimates.shape
 
     # A benchmark set too large for the page gets shorter cells, not a taller figure
@@ -494,7 +502,7 @@ def render_effect_size_heatmap(
     # Vector output leaves hairline seams between the bands of the bar unless they overlap
     colorbar.solids.set_edgecolor("face")
 
-    label = style.label
+    label = effect_size_style.label_fmt.format(symbol=metric_metadata.symbol)
     if isinstance(norm, SymLogNorm):
         colorbar.ax.yaxis.set_major_locator(
             SymmetricalLogLocator(linthresh=HEATMAP_LINEAR_THRESHOLD, base=10)
@@ -520,12 +528,13 @@ def generate_effect_size_heatmaps(
     jdk_versions: dict[str, JdkVersion],
 ) -> None:
     """Generate an effect size heatmap of the specified metric for each variant of a scenario"""
-    metric_label = get_metric_label(metric)
+    metric_metadata = get_metric_metadata(metric)
+    metric_name = metric_metadata.name
     heatmaps = prepare_heatmap_data(comparison_data, metric, effect_size, jdk_versions)
 
     for variant, data in heatmaps.items():
-        fig = render_effect_size_heatmap(data, effect_size, norm)
-        stem = f"{variant}_{underscore(metric_label)}_{underscore(effect_size)}_heatmap"
+        fig = render_effect_size_heatmap(data, metric_metadata, effect_size, norm)
+        stem = f"{variant}_{underscore(metric_name)}_{underscore(effect_size)}_heatmap"
         try:
             export_plot(fig, output_dir, stem, "heatmap")
         finally:
@@ -610,7 +619,8 @@ def prepare_forest_plot_data(
 def draw_forest_plot_graph(
     ax: plt.Axes,
     plot_df: pl.DataFrame,
-    style: EffectSizeStyle,
+    metric_metadata: MetricMetadata,
+    effect_size_style: EffectSizeStyle,
 ) -> None:
     """Draw the graphical area of a forest plot"""
     programs = plot_df.get_column("Program").to_list()
@@ -632,9 +642,9 @@ def draw_forest_plot_graph(
         zorder=2,
     )  # fmt: skip
 
-    label = style.label
-    if style.limits is not None:
-        ax.set_xlim(style.limits)
+    label = effect_size_style.label_fmt.format(symbol=metric_metadata.symbol)
+    if effect_size_style.limits is not None:
+        ax.set_xlim(effect_size_style.limits)
     else:
         # Match the xscale of effect size heatmaps
         ax.set_xscale("symlog", linthresh=HEATMAP_LINEAR_THRESHOLD)
@@ -654,7 +664,7 @@ def draw_forest_plot_graph(
 def draw_forest_plot_table(
     ax: plt.Axes,
     plot_df: pl.DataFrame,
-    style: EffectSizeStyle,
+    effect_size_style: EffectSizeStyle,
 ) -> None:
     """Draw the estimate and its interval as one centered monospaced column"""
     ax.axis("off")
@@ -679,7 +689,7 @@ def draw_forest_plot_table(
         FOREST_PLOT_HEADER_FONT,
     )
 
-    fmt = f"+z{style.plot_column_width}.{style.precision}f"
+    fmt = f"+z{effect_size_style.plot_column_width}.{effect_size_style.precision}f"
     for i, row in enumerate(plot_df.iter_rows(named=True)):
         estimate = row[FOREST_PLOT_ESTIMATE_COLUMN]
         ci_low = row[FOREST_PLOT_CI_LOW_COLUMN]
@@ -690,11 +700,12 @@ def draw_forest_plot_table(
 
 def render_forest_plot(
     plot_df: pl.DataFrame,
+    metric_metadata: MetricMetadata,
     effect_size: EffectSize,
 ) -> plt.Figure:
     """Render a forest plot of `plot_df` with boostrap CI whiskers"""
     apply_style()
-    style = EFFECT_SIZE_STYLES[effect_size]
+    effect_size_style = EFFECT_SIZE_STYLES[effect_size]
     n = plot_df.height
 
     fig, (ax, ax_labels) = plt.subplots(
@@ -717,8 +728,8 @@ def render_forest_plot(
         for yi in range(0, n, 2):
             axes.axhspan(yi - 0.5, yi + 0.5, color="black", alpha=0.04, zorder=0)
 
-    draw_forest_plot_graph(ax, plot_df, style)
-    draw_forest_plot_table(ax_labels, plot_df, style)
+    draw_forest_plot_graph(ax, plot_df, metric_metadata, effect_size_style)
+    draw_forest_plot_table(ax_labels, plot_df, effect_size_style)
 
     # Set last, and on one Axes only: `sharey` propagates it, and it has to
     # survive the autoscaling that the panels' own drawing would otherwise trigger
@@ -735,8 +746,8 @@ def generate_forest_plot(
     effect_size: EffectSize,
 ) -> None:
     """Generate a forest plot for the specified variant directory, metric and effect size"""
-    metric_label = get_metric_label(metric)
-    stem = f"{underscore(metric_label)}_{underscore(effect_size)}_forest_plot"
+    metric_metadata = get_metric_metadata(metric)
+    stem = f"{underscore(metric_metadata.name)}_{underscore(effect_size)}_forest_plot"
     # Remove any stale plot, so none survives even if this one cannot be drawn
     remove_plot(variant_dir, stem)
 
@@ -748,7 +759,7 @@ def generate_forest_plot(
         )  # fmt: skip
         return
 
-    fig = render_forest_plot(plot_df, effect_size)
+    fig = render_forest_plot(plot_df, metric_metadata, effect_size)
     try:
         export_plot(fig, variant_dir, stem, "forest plot")
     finally:
@@ -909,8 +920,11 @@ def render_energy_time_scatter_grid(
 
     # Make it clear that the panels use a symlog scale
     suffix = f"\n(logarithmic beyond ±{SCATTER_PLOT_LINEAR_THRESHOLD:g})"
-    fig.supxlabel(f"$\\Delta$time (%){suffix}", ma="center")
-    fig.supylabel(f"$\\Delta$energy (%){suffix}", ma="center")
+    label_fmt = EFFECT_SIZE_STYLES[EffectSize.MEDIAN_DIFFERENCE_PERCENT].label_fmt
+    time_symbol = get_metric_metadata(Metric.TIME).symbol
+    energy_symbol = get_metric_metadata(Metric.PACKAGE_AND_DRAM).symbol
+    fig.supxlabel(f"{label_fmt.format(symbol=time_symbol)}{suffix}", ma="center")
+    fig.supylabel(f"{label_fmt.format(symbol=energy_symbol)}{suffix}", ma="center")
     fig.tight_layout()
 
     fig.canvas.draw()
@@ -1053,9 +1067,11 @@ def render_trend_grid(
     for ax in flat_axes[len(benchmarks) :]:
         ax.set_axis_off()
 
+    metric_metadata = get_metric_metadata(metric)
+    effect_size_style = EFFECT_SIZE_STYLES[TREND_PLOT_EFFECT_SIZE]
     fig.supxlabel("Java version")
     fig.supylabel(
-        f"$\\Delta${get_metric_label(metric).lower()} (%)\n"
+        f"{effect_size_style.label_fmt.format(symbol=metric_metadata.symbol)}\n"
         f"(shaded: {CI_LEVEL_PERCENT}% CI)",
         ma="center",
     )
@@ -1105,7 +1121,8 @@ def trend_plot_jobs(
     jdks = sort_jdks(metric_df.get_column("JDK").unique().to_list(), jdk_versions)
 
     jdk_labels = get_jdk_labels(jdks, jdk_versions)
-    stem_suffix = f"{underscore(get_metric_label(metric))}_trend_plot"
+    metric_metadata = get_metric_metadata(metric)
+    stem_suffix = f"{underscore(metric_metadata.name)}_trend_plot"
 
     plot_jobs: dict[TrendPlotJobKey, Job[None]] = {}
     for variant in sorted(metric_df.get_column("Variant").unique()):
