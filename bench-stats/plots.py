@@ -205,6 +205,7 @@ EFFECT_SIZE_STYLES: dict[EffectSize, EffectSizeStyle] = {
 # Which forest plots to render for every variant directory
 FOREST_PLOTS: tuple[tuple[Metric, EffectSize], ...] = (
     (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
+    (Metric.PACKAGE_AND_DRAM, EffectSize.CLIFFS_DELTA),
 )
 
 
@@ -242,6 +243,7 @@ HEATMAP_LIGHT_CELL_TEXT_COLOR = "black"
 # Which heatmaps to render for every scenario
 HEATMAPS: tuple[tuple[Metric, EffectSize], ...] = (
     (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
+    (Metric.PACKAGE_AND_DRAM, EffectSize.CLIFFS_DELTA),
 )
 
 

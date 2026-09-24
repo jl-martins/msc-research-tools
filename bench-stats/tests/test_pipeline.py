@@ -259,8 +259,8 @@ def test_run_survives_a_failed_job(tree: Path, caplog, monkeypatch):
     with caplog.at_level(logging.ERROR):
         n_failures = run(tree, n_jobs=1, n_resamples=TEST_RESAMPLES)
 
-    # One forest plot job per JDK, and the rest of the run goes on
-    assert n_failures == len(JDKS)
+    # One job per forest plot and JDK, and the rest of the run goes on
+    assert n_failures == len(JDKS) * len(plots.FOREST_PLOTS)
     assert "Failed: PackageAndDRAM forest plot" in caplog.text
     assert (tree / "energy_time_correlation.csv").exists()
     for jdk in JDKS:
