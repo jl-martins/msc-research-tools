@@ -315,18 +315,10 @@ TREND_PLOT_VERTICAL_MARGIN_INCHES = 0.9
 TREND_PLOT_LINE_COLOR = FOREST_PLOT_MARKER_COLOR
 TREND_PLOT_BAND_ALPHA = 0.25
 
-# Effect size drawn by every trend plot
-TREND_PLOT_EFFECT_SIZE = EffectSize.MEDIAN_DIFFERENCE_PERCENT
-
-# Columns that must be finite for a comparison to be drawn in a trend plot
-TREND_PLOT_FINITE_COLUMNS = (
-    TREND_PLOT_EFFECT_SIZE,
-    f"{TREND_PLOT_EFFECT_SIZE}_CI_Low",
-    f"{TREND_PLOT_EFFECT_SIZE}_CI_High",
+# Which trend plots to render for every variant and scenario
+TREND_PLOTS: tuple[tuple[Metric, EffectSize], ...] = (
+    (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
 )
-
-# Which metrics to render a trend plot of for every variant and scenario
-TREND_PLOTS: tuple[Metric, ...] = (Metric.PACKAGE_AND_DRAM,)
 
 
 def export_plot(fig: plt.Figure, output_dir: Path, stem: str, description: str) -> None:
@@ -1001,6 +993,7 @@ def energy_time_scatter_plot_jobs(
 def render_trend_panel(
     ax: plt.Axes,
     benchmark_df: pl.DataFrame,
+    effect_size: EffectSize,
     jdk_labels: dict[str, str],
 ) -> None:
     """Draw one benchmark panel of a trend plot, with its confidence band"""
@@ -1009,9 +1002,9 @@ def render_trend_panel(
         benchmark_df, on="JDK", how="left", maintain_order="left"
     )
     x = np.arange(len(jdk_labels))
-    estimates, ci_low, ci_high = (
-        panel_df.get_column(column).to_numpy() for column in TREND_PLOT_FINITE_COLUMNS
-    )
+    estimates = panel_df.get_column(effect_size).to_numpy()
+    ci_low = panel_df.get_column(f"{effect_size}_CI_Low").to_numpy()
+    ci_high = panel_df.get_column(f"{effect_size}_CI_High").to_numpy()
 
     ax.fill_between(
         x, ci_low, ci_high,
@@ -1021,9 +1014,11 @@ def render_trend_panel(
     # Markers keep a point visible when gaps surround it
     ax.plot(x, estimates, color=TREND_PLOT_LINE_COLOR, marker="o", markersize=3)
 
-    # Limits are frozen before drawing the zero line, so that the panel fits its data.
-    # The line then only shows when zero lies within that range.
-    ax.set_ylim(ax.get_ylim())
+    # A bounded effect size spans its whole range. Otherwise, limits are frozen before
+    # drawing the zero line, so that the panel fits its data. The line then only shows
+    # when zero lies within that range.
+    limits = EFFECT_SIZE_STYLES[effect_size].limits
+    ax.set_ylim(limits or ax.get_ylim())
     ax.axhline(0, **ZERO_LINE_STYLE)
 
     # Major versions fit side by side, while names do not
@@ -1038,6 +1033,7 @@ def render_trend_panel(
 def render_trend_grid(
     scenario_df: pl.DataFrame,
     metric: Metric,
+    effect_size: EffectSize,
     jdk_labels: dict[str, str],
 ) -> plt.Figure:
     """Render one scenario's grid of trend panels of a metric, one per benchmark"""
@@ -1060,7 +1056,7 @@ def render_trend_grid(
     flat_axes: list[Axes] = list(axes.flat)
     for ax, benchmark in zip(flat_axes, benchmarks, strict=False):
         benchmark_df = scenario_df.filter(pl.col("Program") == benchmark)
-        render_trend_panel(ax, benchmark_df, jdk_labels)
+        render_trend_panel(ax, benchmark_df, effect_size, jdk_labels)
         ax.set_title(benchmark)
 
     # The panels fill whole rows, so the grid can end with empty slots
@@ -1068,7 +1064,7 @@ def render_trend_grid(
         ax.set_axis_off()
 
     metric_metadata = get_metric_metadata(metric)
-    effect_size_style = EFFECT_SIZE_STYLES[TREND_PLOT_EFFECT_SIZE]
+    effect_size_style = EFFECT_SIZE_STYLES[effect_size]
     fig.supxlabel("Java version")
     fig.supylabel(
         f"{effect_size_style.label_fmt.format(symbol=metric_metadata.symbol)}\n"
@@ -1083,11 +1079,12 @@ def generate_trend_plot(
     output_dir: Path,
     scenario_df: pl.DataFrame,
     metric: Metric,
+    effect_size: EffectSize,
     jdk_labels: dict[str, str],
     stem: str,
 ) -> None:
     """Generate one scenario's grid of trend panels of a metric"""
-    fig = render_trend_grid(scenario_df, metric, jdk_labels)
+    fig = render_trend_grid(scenario_df, metric, effect_size, jdk_labels)
     try:
         export_plot(fig, output_dir, stem, "trend plot")
     finally:
@@ -1100,20 +1097,22 @@ class TrendPlotJobKey(NamedTuple):
     scenario_dir: Path
     variant: str
     metric: Metric
+    effect_size: EffectSize
 
 
 def trend_plot_jobs(
     root_dir: Path,
     comparison_data: pl.DataFrame,
     metric: Metric,
+    effect_size: EffectSize,
     jdk_versions: dict[str, JdkVersion],
 ) -> dict[TrendPlotJobKey, Job[None]]:
     """Return the jobs that draw a trend plot of a metric for each variant and scenario"""
+    # Only comparisons with a finite estimate and interval can be drawn
+    finite_columns = (effect_size, f"{effect_size}_CI_Low", f"{effect_size}_CI_High")
     metric_df = comparison_data.filter(
         (pl.col("Metric") == metric)
-        & pl.all_horizontal(
-            pl.col(TREND_PLOT_FINITE_COLUMNS).is_finite().fill_null(False)
-        )
+        & pl.all_horizontal(pl.col(finite_columns).is_finite().fill_null(False))
     )
 
     # Sorted once for every trend plot of the metric, so each JDK has
@@ -1121,20 +1120,21 @@ def trend_plot_jobs(
     jdks = sort_jdks(metric_df.get_column("JDK").unique().to_list(), jdk_versions)
 
     jdk_labels = get_jdk_labels(jdks, jdk_versions)
-    metric_metadata = get_metric_metadata(metric)
-    stem_suffix = f"{underscore(metric_metadata.name)}_trend_plot"
+    metric_name = get_metric_metadata(metric).name
+    stem_suffix = f"{underscore(metric_name)}_{underscore(effect_size)}_trend_plot"
 
     plot_jobs: dict[TrendPlotJobKey, Job[None]] = {}
     for variant in sorted(metric_df.get_column("Variant").unique()):
         variant_df = metric_df.filter(pl.col("Variant") == variant)
         plot_jobs |= {
-            TrendPlotJobKey(root_dir / scenario, variant, metric): (
-                f"{variant} {metric} trend plot of '{root_dir / scenario}'",
+            TrendPlotJobKey(root_dir / scenario, variant, metric, effect_size): (
+                f"{variant} {metric} {effect_size} trend plot of '{root_dir / scenario}'",
                 functools.partial(
                     generate_trend_plot,
                     root_dir / scenario,
                     variant_df.filter(pl.col("Scenario") == scenario),
                     metric,
+                    effect_size,
                     jdk_labels,
                     f"{variant}_{stem_suffix}",
                 ),

@@ -372,8 +372,10 @@ def overall_plot_jobs(
     # Merged as items, which mypy accepts for keys of any `JobKey` type
     heatmap_jobs = effect_size_heatmap_jobs(root_dir, comparison_data, jdk_versions)
     plot_jobs |= heatmap_jobs.items()
-    for metric in TREND_PLOTS:
-        trend_jobs = trend_plot_jobs(root_dir, comparison_data, metric, jdk_versions)
+    for metric, effect_size in TREND_PLOTS:
+        trend_jobs = trend_plot_jobs(
+            root_dir, comparison_data, metric, effect_size, jdk_versions
+        )
         plot_jobs |= trend_jobs.items()
 
     long_df = build_long_time_and_energy_table(comparison_data)
