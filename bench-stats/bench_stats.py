@@ -45,6 +45,7 @@ import itertools
 import logging
 import os
 import sys
+import textwrap
 from collections import defaultdict
 from concurrent.futures import Executor
 from pathlib import Path
@@ -73,6 +74,8 @@ from measurements import (
     load_and_clean_measurements,
 )
 from plots import (
+    FONT_DIR_ENV_VAR,
+    FONT_FILES,
     TREND_PLOTS,
     ForestPlotJobKey,
     effect_size_heatmap_jobs,
@@ -541,6 +544,16 @@ def positive_int(value: str) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate benchmark statistics for Master's Dissertation",
+        epilog="environment variables:\n"
+        + textwrap.fill(
+            f"directory containing {' and '.join(FONT_FILES)}, the fonts that the "
+            "plots are laid out and exported in. If unset, or if the fonts are "
+            "missing, plots are laid out in matplotlib's default font.",
+            width=80,
+            initial_indent=f"  {FONT_DIR_ENV_VAR}  ",
+            subsequent_indent=" " * (len(FONT_DIR_ENV_VAR) + 4),
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         color=False,
     )
     parser.add_argument(

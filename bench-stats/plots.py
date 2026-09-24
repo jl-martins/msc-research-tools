@@ -5,6 +5,7 @@ Forest plots, heatmaps, scatter plots and trend plots of the comparisons, export
 import functools
 import logging
 import math
+import os
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -19,6 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from adjustText import adjust_text  # type: ignore[import-untyped]
 from inflection import underscore
+from matplotlib import font_manager
 from matplotlib.colors import Normalize, SymLogNorm
 from matplotlib.scale import SymmetricalLogTransform
 from matplotlib.ticker import FuncFormatter, SymmetricalLogLocator
@@ -28,6 +30,75 @@ from jobs import Job
 from measurements import JdkVersion, Metric, get_jdk_labels, sort_jdks
 
 logger = logging.getLogger(__name__)
+
+
+# Page geometry
+
+# Size of the text block of the dissertation (160 mm x 247 mm).
+# Every figure is drawn at its final size to fit the page without resizing.
+TEXT_WIDTH_INCHES = 6.30
+
+# Tallest a figure may be: text height (9.72 in) minus 1.22 in for the caption
+MAX_FIGURE_HEIGHT_INCHES = 8.5
+
+
+# Fonts
+
+# Environment variable naming the directory that holds the font files of the dissertation
+FONT_DIR_ENV_VAR = "BENCH_STATS_FONT_DIR"
+FONT_FAMILY = "NewsGotT"
+FONT_FILES = ("NewsGotT.ttf", "NewsGotTBold.ttf")
+
+# Text sizes in points, set as the matplotlib defaults so that most text needs no
+# font of its own. The densest text (annotations, point labels) is slightly smaller.
+AXIS_LABEL_FONT_SIZE = 9
+TICK_FONT_SIZE = 8
+LEGEND_FONT_SIZE = 8
+
+
+@functools.cache  # Ensure styles are only applied once per process
+def apply_style() -> None:
+    """Configure matplotlib to lay out and export text in the fonts of the dissertation"""
+    matplotlib.rcParams.update({
+        "font.size": TICK_FONT_SIZE,
+        "axes.labelsize": AXIS_LABEL_FONT_SIZE,
+        "axes.titlesize": AXIS_LABEL_FONT_SIZE,
+        "xtick.labelsize": TICK_FONT_SIZE,
+        "ytick.labelsize": TICK_FONT_SIZE,
+        "legend.fontsize": LEGEND_FONT_SIZE,
+        "figure.labelsize": AXIS_LABEL_FONT_SIZE,
+    })  # fmt: skip
+
+    font_directory = Path(os.environ.get(FONT_DIR_ENV_VAR, "/usr/local/share/fonts"))
+    fonts = [font_directory / name for name in FONT_FILES]
+    if not all(font.is_file() for font in fonts):
+        logger.warning(
+            "Fonts %s not found in '%s' (set %s environment variable). Plots will be "
+            "laid out in matplotlib's default font, so their text may not fit once included.",
+            FONT_FILES, font_directory, FONT_DIR_ENV_VAR,
+        )  # fmt: skip
+        return
+
+    # Matplotlib lays out a figure with its own font metrics, not with LaTeX's,
+    # so it must know the font that the PGF file is measured and typeset in
+    for font in fonts:
+        font_manager.fontManager.addfont(font)
+
+    regular_file, bold_file = FONT_FILES
+    matplotlib.rcParams.update({
+        # A family that is none of serif, sans-serif and monospace, with `pgf.rcfonts`
+        # off, is exported as the font of the including document (see
+        # `_escape_and_apply_props` in matplotlib's `backends/backend_pgf.py`)
+        "font.family": [FONT_FAMILY],
+        "pgf.rcfonts": False,
+        "pgf.texsystem": "lualatex",
+        "pgf.preamble": "\n".join([
+            r"\usepackage{fontspec}",
+            rf"\setmainfont{{{regular_file}}}"
+            rf"[Path=\detokenize{{{font_directory.resolve().as_posix()}/}},"
+            rf"BoldFont={bold_file}]",
+        ]),
+    })  # fmt: skip
 
 
 # Human-readable names for the metrics that get plotted.
@@ -47,11 +118,6 @@ CI_LEVEL_PERCENT = round((1 - ALPHA) * 100)
 
 
 # Panel configuration, shared by the scatter plots and the trend plots
-
-# Fonts for the panel titles and axis ticks. Matplotlib's defaults are sized for
-# a figure far larger than one of these panels, so both are set explicitly.
-PANEL_TITLE_FONT: dict[str, Any] = {"size": 9}
-PANEL_TICK_FONT: dict[str, Any] = {"size": 7}
 
 # Reference line at zero, drawn under the data of every panel
 ZERO_LINE_STYLE: dict[str, Any] = {
@@ -87,8 +153,21 @@ FOREST_PLOT_HEADER_Y = -1.0
 
 # Forest plot colors and fonts
 FOREST_PLOT_MARKER_COLOR = "#4C72B0"
-FOREST_PLOT_HEADER_FONT: dict[str, Any] = {"weight": "bold", "size": 10}
-FOREST_PLOT_VALUE_FONT: dict[str, Any] = {"family": "monospace", "size": 9}
+FOREST_PLOT_HEADER_FONT: dict[str, Any] = {"weight": "bold", "size": 8}
+FOREST_PLOT_VALUE_FONT: dict[str, Any] = {"family": "monospace", "size": 7}
+
+# Relative widths of the graph and of the table of values of a forest plot. The
+# table is sized to its widest row, leaving the rest of the page to the graph.
+FOREST_PLOT_WIDTH_RATIOS = (3.6, 1.7)
+
+# Height of a row of a forest plot and of the margin for the header and axis label
+FOREST_PLOT_ROW_HEIGHT_INCHES = 0.3
+FOREST_PLOT_VERTICAL_MARGIN_INCHES = 0.9
+
+# Sizes of the whiskers and of the marker of a forest plot, in points
+FOREST_PLOT_WHISKER_WIDTH = 1.0
+FOREST_PLOT_WHISKER_CAP_SIZE = 2
+FOREST_PLOT_MARKER_SIZE = 4
 
 
 class EffectSizeStyle(NamedTuple):
@@ -109,7 +188,7 @@ EFFECT_SIZE_STYLES: dict[EffectSize, EffectSizeStyle] = {
         precision=1,
     ),
     EffectSize.CLIFFS_DELTA: EffectSizeStyle(
-        label="Cliff's δ",
+        label="Cliff's $\\delta$",
         precision=3,
         limits=(-1.05, 1.05),
     ),
@@ -138,15 +217,13 @@ HEATMAP_MISSING_COLOR = "#DDDDDD"
 # many small effects into an indistinguishable near-white block.
 HEATMAP_LINEAR_THRESHOLD = 10.0
 
-# Size of a single heatmap cell and of the margins reserved for
-# the axis labels and the colorbar, all in inches.
-HEATMAP_CELL_WIDTH_INCHES = 1.5
-HEATMAP_CELL_HEIGHT_INCHES = 0.55
-HEATMAP_HORIZONTAL_MARGIN_INCHES = 2.5
-HEATMAP_VERTICAL_MARGIN_INCHES = 1.5
+# Height of a single heatmap cell and the margin reserved below the cells for the axis label
+HEATMAP_CELL_HEIGHT_INCHES = 0.43
+HEATMAP_VERTICAL_MARGIN_INCHES = 0.75
 
-# Heatmap cell annotation font
-HEATMAP_CELL_FONT: dict[str, Any] = {"family": "monospace", "size": 7}
+# Layout of the colorbar beside the heatmap, as `Figure.colorbar` receives it.
+# Kept narrow because the width of the colorbar is taken away from the cells.
+HEATMAP_COLORBAR_LAYOUT: dict[str, Any] = {"fraction": 0.04, "pad": 0.02, "aspect": 30}
 
 # Distance from the middle of the color scale beyond which a cell is
 # dark enough to need light text. The colors of light and dark text are
@@ -167,7 +244,7 @@ HEATMAPS: tuple[tuple[Metric, EffectSize], ...] = (
 SCATTER_PLOT_MARKER_COLOR = FOREST_PLOT_MARKER_COLOR
 
 # Fonts for the per-point benchmark labels and the per-panel correlation annotation
-SCATTER_PLOT_LABEL_FONT: dict[str, Any] = {"size": 6}
+SCATTER_PLOT_LABEL_FONT: dict[str, Any] = {"size": 6.5}
 SCATTER_PLOT_STAT_FONT: dict[str, Any] = {"size": 7}
 
 # Headroom left past the data at each end of an axis, as a fraction of the axis'
@@ -188,12 +265,10 @@ SCATTER_PLOT_LINEAR_SCALE = 1.0
 # narrow to hold a labeled point per benchmark, so they wrap over several rows.
 SCATTER_PLOT_COLUMNS = 2
 
-# Size of a single panel and of the margins reserved for the axis labels,
-# all in inches. The figure grows with the number of panels. Scaling
-# it to a given page is left to whatever includes it.
-SCATTER_PLOT_PANEL_WIDTH_INCHES = 2.9
+# Height of a single panel and the margins reserved for the axis labels.
+# The figure is as wide as the text and grows with the number of rows of
+# its panels, up to the maximum height of the figure.
 SCATTER_PLOT_PANEL_HEIGHT_INCHES = 2.7
-SCATTER_PLOT_HORIZONTAL_MARGIN_INCHES = 0.5
 SCATTER_PLOT_VERTICAL_MARGIN_INCHES = 1.0
 
 # Identity line under the points of every panel
@@ -205,7 +280,7 @@ SCATTER_PLOT_IDENTITY_LINE_STYLE: dict[str, Any] = {
 }
 
 # Rounds `adjust_text` spends spreading the labels of a scatter plot
-SCATTER_PLOT_LABEL_ITERATIONS = 150
+SCATTER_PLOT_LABEL_ITERATIONS = 400
 
 # Leader from a point to wherever `adjust_text` had to move its label
 SCATTER_PLOT_LABEL_ARROW_STYLE: dict[str, Any] = {
@@ -223,12 +298,9 @@ SCATTER_PLOT_STAT_POSITION = (0.04, 0.96)
 # Number of columns the benchmark panels are laid out over
 TREND_PLOT_COLUMNS = 3
 
-# Width of the text block of an A4 page (8.27 in) with 1 in margins.
-# The figure has this width, so it fits the page without rescaling.
-TREND_PLOT_WIDTH_INCHES = 6.27
-
-# Height of a single panel and of the margin reserved for the axis labels,
-# all in inches. Six rows of panels still fit the text height of an A4 page.
+# Height of a single panel and of the margin reserved for the axis labels, all
+# in inches. The figure is as wide as the text and grows with the number of rows
+# of panels, up to the tallest a figure may be.
 TREND_PLOT_PANEL_HEIGHT_INCHES = 1.4
 TREND_PLOT_VERTICAL_MARGIN_INCHES = 0.9
 
@@ -269,12 +341,12 @@ def format_estimate_with_ci(
     ci_high: float,
     style: EffectSizeStyle,
 ) -> str:
-    """Format an effect size as "E\\n[L, H]" (or "" if some value is not finite)"""
+    """Format an effect size as "E\\n[L,H]" (or "" if some value is not finite)"""
     if any(not np.isfinite(v) for v in (estimate, ci_low, ci_high)):
         return ""
 
     fmt = f"+z.{style.precision}f"
-    return f"{estimate:{fmt}}\n[{ci_low:{fmt}}, {ci_high:{fmt}}]"
+    return f"{estimate:{fmt}}\n[{ci_low:{fmt}},{ci_high:{fmt}}]"
 
 
 class HeatmapData(NamedTuple):
@@ -376,7 +448,7 @@ def draw_heatmap_annotations(
         # half a cell past the coordinates of its lower left corner
         ax.text(
             j + 0.5, i + 0.5, annotation,
-            color=color, ha="center", va="center", **HEATMAP_CELL_FONT,
+            color=color, ha="center", va="center",
         )  # fmt: skip
 
 
@@ -386,13 +458,19 @@ def render_effect_size_heatmap(
     norm: Normalize,
 ) -> plt.Figure:
     """Render a heatmap of the effect sizes in `data`, annotated with their bootstrap CIs"""
+    apply_style()
     style = EFFECT_SIZE_STYLES[effect_size]
     rows, columns = data.estimates.shape
 
+    # A benchmark set too large for the page gets shorter cells, not a taller figure
+    cell_height = min(
+        HEATMAP_CELL_HEIGHT_INCHES,
+        (MAX_FIGURE_HEIGHT_INCHES - HEATMAP_VERTICAL_MARGIN_INCHES) / rows,
+    )
     fig, ax = plt.subplots(
         figsize=(
-            columns * HEATMAP_CELL_WIDTH_INCHES + HEATMAP_HORIZONTAL_MARGIN_INCHES,
-            rows * HEATMAP_CELL_HEIGHT_INCHES + HEATMAP_VERTICAL_MARGIN_INCHES,
+            TEXT_WIDTH_INCHES,
+            rows * cell_height + HEATMAP_VERTICAL_MARGIN_INCHES,
         )
     )
 
@@ -410,9 +488,11 @@ def render_effect_size_heatmap(
     ax.set_ylabel("Benchmark")
     ax.invert_yaxis()
 
-    colorbar = fig.colorbar(mesh, ax=ax)
+    colorbar = fig.colorbar(mesh, ax=ax, **HEATMAP_COLORBAR_LAYOUT)
     assert colorbar.solids is not None
     colorbar.solids.set_rasterized(False)
+    # Vector output leaves hairline seams between the bands of the bar unless they overlap
+    colorbar.solids.set_edgecolor("face")
 
     label = style.label
     if isinstance(norm, SymLogNorm):
@@ -424,7 +504,7 @@ def render_effect_size_heatmap(
         colorbar.ax.yaxis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))  # fmt: skip
 
         # Make it clear that the chart uses a symlog scale
-        label += f"\n(logarithmic beyond ±{HEATMAP_LINEAR_THRESHOLD:g})"
+        label += f", logarithmic beyond ±{HEATMAP_LINEAR_THRESHOLD:g}"
 
     colorbar.set_label(label)
     fig.tight_layout()
@@ -546,13 +626,25 @@ def draw_forest_plot_graph(
         estimates, y,
         xerr=x_err, fmt="o",
         color=FOREST_PLOT_MARKER_COLOR,
-        elinewidth=1.5, capsize=3,
-        markersize=5, zorder=2,
+        elinewidth=FOREST_PLOT_WHISKER_WIDTH,
+        capsize=FOREST_PLOT_WHISKER_CAP_SIZE,
+        markersize=FOREST_PLOT_MARKER_SIZE,
+        zorder=2,
     )  # fmt: skip
 
-    ax.set_xlabel(style.label)
+    label = style.label
     if style.limits is not None:
         ax.set_xlim(style.limits)
+    else:
+        # Match the xscale of effect size heatmaps
+        ax.set_xscale("symlog", linthresh=HEATMAP_LINEAR_THRESHOLD)
+        ax.xaxis.set_major_locator(
+            SymmetricalLogLocator(linthresh=HEATMAP_LINEAR_THRESHOLD, base=10)
+        )
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))
+        label += f", logarithmic beyond ±{HEATMAP_LINEAR_THRESHOLD:g}"
+
+    ax.set_xlabel(label)
 
     ax.set_yticks(y)
     ax.set_ylabel("Benchmark")
@@ -601,13 +693,21 @@ def render_forest_plot(
     effect_size: EffectSize,
 ) -> plt.Figure:
     """Render a forest plot of `plot_df` with boostrap CI whiskers"""
+    apply_style()
     style = EFFECT_SIZE_STYLES[effect_size]
     n = plot_df.height
 
     fig, (ax, ax_labels) = plt.subplots(
         1, 2,
-        figsize=(10, max(2.0, 0.35 * (n + 1) + 1.0)),
-        gridspec_kw={"width_ratios": [3, 1.3]},
+        figsize=(
+            TEXT_WIDTH_INCHES,
+            min(
+                MAX_FIGURE_HEIGHT_INCHES,
+                FOREST_PLOT_ROW_HEIGHT_INCHES * (n + 1)
+                + FOREST_PLOT_VERTICAL_MARGIN_INCHES,
+            ),
+        ),
+        gridspec_kw={"width_ratios": FOREST_PLOT_WIDTH_RATIOS},
         sharey=True,
     )  # fmt: skip
 
@@ -769,14 +869,17 @@ def render_energy_time_scatter_grid(
     limits: tuple[float, float],
 ) -> plt.Figure:
     """Render one scenario's grid of energy-time scatter panels, one per JDK"""
+    apply_style()
     rows = math.ceil(len(jdks) / SCATTER_PLOT_COLUMNS)
+    panel_height = min(
+        SCATTER_PLOT_PANEL_HEIGHT_INCHES,
+        (MAX_FIGURE_HEIGHT_INCHES - SCATTER_PLOT_VERTICAL_MARGIN_INCHES) / rows,
+    )
     fig, axes = plt.subplots(
         rows, SCATTER_PLOT_COLUMNS,
         figsize=(
-            SCATTER_PLOT_COLUMNS * SCATTER_PLOT_PANEL_WIDTH_INCHES
-            + SCATTER_PLOT_HORIZONTAL_MARGIN_INCHES,
-            rows * SCATTER_PLOT_PANEL_HEIGHT_INCHES
-            + SCATTER_PLOT_VERTICAL_MARGIN_INCHES,
+            TEXT_WIDTH_INCHES,
+            rows * panel_height + SCATTER_PLOT_VERTICAL_MARGIN_INCHES,
         ),
         sharex=True, sharey=True, squeeze=False,
     )  # fmt: skip
@@ -786,16 +889,12 @@ def render_energy_time_scatter_grid(
     for ax, jdk in zip(flat_axes, jdks, strict=False):
         panel_df = scenario_df.filter(pl.col("JDK") == jdk)
         panel_texts.append((ax, render_energy_time_scatter_panel(ax, panel_df, limits)))
-        ax.set_title(jdk, **PANEL_TITLE_FONT)
+        ax.set_title(jdk)
 
         # Sharing the axes hides every tick label that another panel repeats
         # below or to the left. Put them back, since the panels are spread
         # down a whole page and each one has to be readable on its own.
-        ax.tick_params(
-            labelsize=PANEL_TICK_FONT["size"],
-            labelbottom=True,
-            labelleft=True,
-        )
+        ax.tick_params(labelbottom=True, labelleft=True)
 
         # Read the ticks in the same terms as the points, not in scientific notation
         for axis in (ax.xaxis, ax.yaxis):
@@ -810,8 +909,8 @@ def render_energy_time_scatter_grid(
 
     # Make it clear that the panels use a symlog scale
     suffix = f"\n(logarithmic beyond ±{SCATTER_PLOT_LINEAR_THRESHOLD:g})"
-    fig.supxlabel(f"$\\Delta$time (%){suffix}", ma="center", **PANEL_TITLE_FONT)
-    fig.supylabel(f"$\\Delta$energy (%){suffix}", ma="center", **PANEL_TITLE_FONT)
+    fig.supxlabel(f"$\\Delta$time (%){suffix}", ma="center")
+    fig.supylabel(f"$\\Delta$energy (%){suffix}", ma="center")
     fig.tight_layout()
 
     fig.canvas.draw()
@@ -921,8 +1020,6 @@ def render_trend_panel(
         ax.set_xticks(x)
         ax.set_xticklabels(labels, rotation=45, ha="right", rotation_mode="anchor")
 
-    ax.tick_params(labelsize=PANEL_TICK_FONT["size"])
-
 
 def render_trend_grid(
     scenario_df: pl.DataFrame,
@@ -930,13 +1027,18 @@ def render_trend_grid(
     jdk_labels: dict[str, str],
 ) -> plt.Figure:
     """Render one scenario's grid of trend panels of a metric, one per benchmark"""
+    apply_style()
     benchmarks = sorted(scenario_df.get_column("Program").unique())
     rows = math.ceil(len(benchmarks) / TREND_PLOT_COLUMNS)
     fig, axes = plt.subplots(
         rows, TREND_PLOT_COLUMNS,
         figsize=(
-            TREND_PLOT_WIDTH_INCHES,
-            rows * TREND_PLOT_PANEL_HEIGHT_INCHES + TREND_PLOT_VERTICAL_MARGIN_INCHES,
+            TEXT_WIDTH_INCHES,
+            min(
+                MAX_FIGURE_HEIGHT_INCHES,
+                rows * TREND_PLOT_PANEL_HEIGHT_INCHES
+                + TREND_PLOT_VERTICAL_MARGIN_INCHES,
+            ),
         ),
         squeeze=False,
     )  # fmt: skip
@@ -945,18 +1047,18 @@ def render_trend_grid(
     for ax, benchmark in zip(flat_axes, benchmarks, strict=False):
         benchmark_df = scenario_df.filter(pl.col("Program") == benchmark)
         render_trend_panel(ax, benchmark_df, jdk_labels)
-        ax.set_title(benchmark, **PANEL_TITLE_FONT)
+        ax.set_title(benchmark)
 
     # The panels fill whole rows, so the grid can end with empty slots
     for ax in flat_axes[len(benchmarks) :]:
         ax.set_axis_off()
 
-    fig.supxlabel("Java version", **PANEL_TITLE_FONT)
+    fig.supxlabel("Java version")
     fig.supylabel(
         f"$\\Delta${get_metric_label(metric).lower()} (%)\n"
         f"(shaded: {CI_LEVEL_PERCENT}% CI)",
-        ma="center", **PANEL_TITLE_FONT,
-    )  # fmt: skip
+        ma="center",
+    )
     fig.tight_layout()
     return fig
 

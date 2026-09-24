@@ -1,6 +1,7 @@
 """End-to-end tests of bench-stats on a small tree of measurements"""
 
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -152,6 +153,18 @@ def test_every_output_is_written(completed_run: Path):
         "streams_energy_trend_plot",
     ):
         assert (scenario_dir / f"{stem}.pgf").exists()
+
+
+def test_every_plot_fits_the_page(completed_run: Path):
+    plot_paths = sorted(completed_run.rglob("*.pgf"))
+    assert plot_paths
+
+    for path in plot_paths:
+        size = re.search(r"\\pgfqpoint\{([\d.]+)in\}\{([\d.]+)in\}", path.read_text())
+        assert size is not None, path
+        width, height = map(float, size.groups())
+        assert width <= plots.TEXT_WIDTH_INCHES, path
+        assert height <= plots.MAX_FIGURE_HEIGHT_INCHES, path
 
 
 @pytest.mark.parametrize(
