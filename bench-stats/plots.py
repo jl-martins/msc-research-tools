@@ -505,9 +505,6 @@ def render_effect_size_heatmap(
         # Ensure ticks are read in the same terms as the cells, not in scientific notation
         colorbar.ax.yaxis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))  # fmt: skip
 
-        # Make it clear that the chart uses a symlog scale
-        label += f", logarithmic beyond ±{HEATMAP_LINEAR_THRESHOLD:g}"
-
     colorbar.set_label(label)
     fig.tight_layout()
     return fig
@@ -646,7 +643,6 @@ def draw_forest_plot_graph(
             SymmetricalLogLocator(linthresh=HEATMAP_LINEAR_THRESHOLD, base=10)
         )
         ax.xaxis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))
-        label += f", logarithmic beyond ±{HEATMAP_LINEAR_THRESHOLD:g}"
 
     ax.set_xlabel(label)
 
@@ -912,13 +908,11 @@ def render_energy_time_scatter_grid(
     for ax in flat_axes[len(jdks) :]:
         ax.set_axis_off()
 
-    # Make it clear that the panels use a symlog scale
-    suffix = f"\n(logarithmic beyond ±{SCATTER_PLOT_LINEAR_THRESHOLD:g})"
     label_fmt = EFFECT_SIZE_STYLES[EffectSize.MEDIAN_DIFFERENCE_PERCENT].label_fmt
     time_symbol = get_metric_metadata(Metric.TIME).symbol
     energy_symbol = get_metric_metadata(Metric.PACKAGE_AND_DRAM).symbol
-    fig.supxlabel(f"{label_fmt.format(symbol=time_symbol)}{suffix}", ma="center")
-    fig.supylabel(f"{label_fmt.format(symbol=energy_symbol)}{suffix}", ma="center")
+    fig.supxlabel(label_fmt.format(symbol=time_symbol))
+    fig.supylabel(label_fmt.format(symbol=energy_symbol))
     fig.tight_layout()
 
     fig.canvas.draw()
