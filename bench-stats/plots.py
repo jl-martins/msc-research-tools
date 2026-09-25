@@ -134,6 +134,13 @@ ZERO_LINE_STYLE: dict[str, Any] = {
     "zorder": 1,
 }
 
+# Gridlines at the major ticks, which include the bounds of a symlog axis' linear region
+GRID_STYLE: dict[str, Any] = {
+    "color": "silver",
+    "linestyle": ":",
+    "linewidth": 0.6,
+}
+
 
 # Forest plot configurations
 
@@ -645,6 +652,8 @@ def draw_forest_plot_graph(
         ax.xaxis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))
 
     ax.set_xlabel(label)
+    ax.grid(axis="x", **GRID_STYLE)
+    ax.set_axisbelow(True)
 
     ax.set_yticks(y)
     ax.set_ylabel("Benchmark")
@@ -844,6 +853,8 @@ def render_energy_time_scatter_panel(
 
     ax.axhline(0, **ZERO_LINE_STYLE)
     ax.axvline(0, **ZERO_LINE_STYLE)
+    ax.grid(**GRID_STYLE)
+    ax.set_axisbelow(True)
     ax.plot(limits, limits, **SCATTER_PLOT_IDENTITY_LINE_STYLE)
 
     x = panel_df.get_column("Time_Diff_Percent").to_numpy()
