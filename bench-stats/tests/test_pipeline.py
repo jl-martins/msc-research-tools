@@ -192,6 +192,35 @@ def test_power_is_energy_over_time(tmp_path: Path):
     assert df.get_column("Power").to_list() == (energy / time).to_list()
 
 
+@pytest.mark.parametrize(
+    ("metric", "value"),
+    [("Memory", "NaN"), ("Time", "inf"), ("Package", -3.0), ("Time", 0.0)],
+    ids=["nan", "infinity", "negative-energy", "zero-time"],
+)
+def test_invalid_reading_is_discarded(tmp_path: Path, caplog, metric, value):
+    path = tmp_path / "measurements.csv"
+    rows = measurement_rows(np.random.default_rng(0), "alpha", 1.0)
+    rows[0][metric] = value
+    write_measurements(path, rows)
+
+    with caplog.at_level(logging.WARNING):
+        df = read_measurements(path)
+
+    assert df.get_column(metric)[0] is None
+    assert f"Discarding invalid {metric} values" in caplog.text
+
+
+def test_zero_time_has_no_power(tmp_path: Path):
+    path = tmp_path / "measurements.csv"
+    rows = measurement_rows(np.random.default_rng(0), "alpha", 1.0)
+    rows[0]["Time"] = 0.0
+    write_measurements(path, rows)
+
+    df = read_measurements(path)
+
+    assert df.get_column("Power")[0] is None
+
+
 def test_a_benchmark_with_unexpected_columns_is_left_out(tree: Path, caplog):
     jdk_dir = tree / SCENARIO / "temurin-17"
     write_invalid_measurements(jdk_dir / "loops/alpha/measurements.csv")

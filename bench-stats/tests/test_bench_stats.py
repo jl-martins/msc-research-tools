@@ -72,6 +72,15 @@ def test_cliffs_delta_interval_keeps_its_width_for_disjoint_samples():
     assert row["Cliffs_Delta_CI_High"] == 1.0
 
 
+def test_non_finite_sample_is_refused():
+    baseline = np.linspace(90.0, 100.0, 20)
+    variant = np.linspace(110.0, 120.0, 20)
+    variant[3] = np.nan
+
+    with pytest.raises(ValueError, match="non-finite"):
+        compare_metric(KEY, METRIC, baseline, variant)
+
+
 def test_median_difference_interval_matches_its_values_before_the_switch():
     # The interval values were computed by the bootstrap of the median-based difference
     # before Cliff's delta stopped being bootstrapped. Each statistic has a stream of its

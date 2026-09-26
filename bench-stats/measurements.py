@@ -56,6 +56,9 @@ DERIVED_METRICS = {
     Metric.POWER: ENERGY / pl.col(Metric.TIME),
 }
 
+# Metrics that a sound run always reads above zero
+POSITIVE_METRICS = (Metric.PACKAGE, Metric.TIME)
+
 
 # Columns
 METRICS = [*MEASURED_METRICS_SCHEMA, *DERIVED_METRICS]
@@ -216,6 +219,26 @@ def read_measurements(measurements_path: Path) -> pl.DataFrame:
         )
 
     df = pl.read_csv(measurements_path, schema=MEASUREMENTS_SCHEMA)
+
+    # Polars reads NaN and infinity as numbers rather than nulls, so they are nulled
+    # here, with impossible readings, before the derived metrics are computed
+    valid = {metric: pl.col(metric).is_finite() for metric in MEASURED_METRICS_SCHEMA}
+    for metric in POSITIVE_METRICS:
+        valid[metric] &= pl.col(metric) > 0
+
+    invalid_values = df.select(
+        pl.col(metric).filter(~is_valid).implode() for metric, is_valid in valid.items()
+    ).row(0, named=True)
+    for metric, values in invalid_values.items():
+        if values:
+            logger.warning(
+                "Discarding invalid %s values from '%s': %s",
+                metric, measurements_path, values,
+            )  # fmt: skip
+
+    df = df.with_columns(
+        pl.when(is_valid).then(pl.col(metric)) for metric, is_valid in valid.items()
+    )
     return df.with_columns(
         expression.alias(metric) for metric, expression in DERIVED_METRICS.items()
     )

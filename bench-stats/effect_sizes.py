@@ -309,6 +309,10 @@ def compare_metric(
         )  # fmt: skip
         return None
 
+    # A NaN would pass every statistic below and be classified as a large effect
+    if not (np.isfinite(x).all() and np.isfinite(y).all()):
+        raise ValueError(f"{sample_key}/{metric}: non-finite values in samples")
+
     med_x, med_y = np.median(x), np.median(y)
     med_diff = med_y - med_x
     med_diff_pct = (med_diff / med_x) * 100 if med_x != 0 else np.nan
