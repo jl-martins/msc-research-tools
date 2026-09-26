@@ -2,15 +2,15 @@
 
 import logging
 import math
-import re
 
+import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 import pytest
 
 from effect_sizes import compare_metric, generate_energy_time_correlation_table
 from measurements import SampleKey, get_jdk_labels, parse_jdk_version
-from plots import format_scatter_statistics
+from plots import format_scatter_statistics, render_energy_time_scatter_panel
 from rank_corr import total_spearman
 
 KEY = SampleKey("cold", "temurin-21", "streams", "fop")
@@ -135,7 +135,7 @@ def test_correlation_table_leaves_a_constant_difference_undefined(caplog):
     assert row["Program_Count"] == 15
 
 
-def test_scatter_statistics_show_the_correlation_with_its_interval_above_the_size():
+def test_scatter_statistics_show_the_correlation_with_its_interval():
     panel_df = scatter_panel(15)
 
     text = format_scatter_statistics(panel_df)
@@ -145,23 +145,44 @@ def test_scatter_statistics_show_the_correlation_with_its_interval_above_the_siz
         panel_df.get_column("Energy_Diff_Percent"),
         panel_df.get_column("Benchmark"),
     )
-    assert re.fullmatch(
-        r"\$\\rho = -?\d\.\d\d\$ \[-?\d\.\d\d, -?\d\.\d\d\]\n\$n = 15\$", text
-    )
-    assert text.startswith(
+    assert text == (
         f"$\\rho = {expected.estimate:.2f}$ [{expected.low:.2f}, {expected.high:.2f}]"
     )
 
 
-def test_scatter_statistics_show_only_the_size_when_the_correlation_has_no_interval():
+def test_scatter_statistics_show_an_undefined_correlation_without_interval():
     # Two benchmarks are too few to correlate. A perfect correlation has no interval
     # on the Fisher scale, so its estimate is not shown either, as in the heatmaps.
     perfect = scatter_panel(15).with_columns(
         pl.col("Time_Diff_Percent").alias("Energy_Diff_Percent")
     )
 
-    assert format_scatter_statistics(scatter_panel(2)) == "$n = 2$"
-    assert format_scatter_statistics(perfect) == "$n = 15$"
+    assert format_scatter_statistics(scatter_panel(2)) == r"$\rho$ undefined"
+    assert format_scatter_statistics(perfect) == r"$\rho$ undefined"
+
+
+def test_nan_interval_draws_a_hollow_marker():
+    # Every interval is its estimate alone, which excludes 0, but the first has a NaN bound
+    panel_df = scatter_panel(15).with_columns(
+        pl.col(column).alias(f"{column}{suffix}")
+        for column in ("Time_Diff_Percent", "Energy_Diff_Percent")
+        for suffix in ("_CI_Low", "_CI_High")
+    )
+    first_row = pl.int_range(pl.len()) == 0
+    panel_df = panel_df.with_columns(
+        pl.when(first_row)
+        .then(math.nan)
+        .otherwise(pl.col("Time_Diff_Percent_CI_Low"))
+        .alias("Time_Diff_Percent_CI_Low")
+    )
+
+    fig, ax = plt.subplots()
+    render_energy_time_scatter_panel(ax, panel_df, (-100.0, 100.0), label_points=False)
+    hollow = ax.collections[-1]
+    plt.close(fig)
+
+    expected = panel_df.select("Time_Diff_Percent", "Energy_Diff_Percent").row(0)
+    assert hollow.get_offsets().tolist() == [list(expected)]
 
 
 JDK_VERSIONS = {

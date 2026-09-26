@@ -348,14 +348,27 @@ def compare_metric(
 
 
 def build_long_time_and_energy_table(comparison_data: pl.DataFrame) -> pl.DataFrame:
-    """Build a long (Benchmark, JDK, Scenario, Variant, Time_Diff_Percent, Energy_Diff_Percent) table"""
+    """
+    Build a long table of the time and energy differences of each benchmark
+
+    The columns are Benchmark, JDK, Scenario, Variant, `Time_Diff_Percent` and
+    `Energy_Diff_Percent`, each with its `_CI_Low` and `_CI_High` bounds.
+    """
     keys = ["Program", "JDK", "Scenario", "Variant"]
-    time_df = comparison_data.filter(pl.col("Metric") == Metric.TIME).select(
-        *keys, pl.col("Median_Difference_Percent").alias("Time_Diff_Percent")
-    )
-    energy_df = comparison_data.filter(
-        pl.col("Metric") == Metric.PACKAGE_AND_DRAM
-    ).select(*keys, pl.col("Median_Difference_Percent").alias("Energy_Diff_Percent"))
+
+    def select_metric(metric: Metric, prefix: str) -> pl.DataFrame:
+        return comparison_data.filter(pl.col("Metric") == metric).select(
+            *keys,
+            *(
+                pl.col(f"Median_Difference_Percent{suffix}").alias(
+                    f"{prefix}_Diff_Percent{suffix}"
+                )
+                for suffix in ("", "_CI_Low", "_CI_High")
+            ),
+        )
+
+    time_df = select_metric(Metric.TIME, "Time")
+    energy_df = select_metric(Metric.PACKAGE_AND_DRAM, "Energy")
 
     long_df = time_df.join(energy_df, on=keys, how="inner")
     finite = (
