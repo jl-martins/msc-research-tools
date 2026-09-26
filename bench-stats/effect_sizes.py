@@ -8,14 +8,15 @@ import logging
 import math
 import warnings
 from enum import StrEnum
-from typing import Any, Final, Literal, NamedTuple, Protocol, TypedDict
+from pathlib import Path
+from typing import Any, Final, Literal, NamedTuple, Protocol, TypedDict, get_args
 
 import numpy as np
 import numpy.typing as npt
 import polars as pl
 from scipy.stats import DegenerateDataWarning, bootstrap, iqr, norm, rankdata
 
-from measurements import Metric, SampleKey
+from measurements import JdkVersion, Metric, SampleKey, sort_jdks
 from rank_corr import ClusteredCorrelation, total_spearman
 
 logger = logging.getLogger(__name__)
@@ -434,8 +435,15 @@ def spearman_row(
     }
 
 
-def generate_energy_time_correlation_table(long_df: pl.DataFrame) -> pl.DataFrame:
-    """Compute the clustered Spearman correlation between Time_Diff_Percent and Energy_Diff_Percent, per variant and scenario"""
+def generate_energy_time_correlation_table(
+    path: Path,
+    long_df: pl.DataFrame,
+) -> pl.DataFrame:
+    """
+    Compute the clustered Spearman correlation between Time_Diff_Percent and Energy_Diff_Percent, per variant and scenario
+
+    Store the result in a CSV at `path` and return it.
+    """
     rows = []
     for variant in sorted(long_df.get_column("Variant").unique()):
         variant_df = long_df.filter(pl.col("Variant") == variant)
@@ -451,4 +459,57 @@ def generate_energy_time_correlation_table(long_df: pl.DataFrame) -> pl.DataFram
             for scenario in sorted(variant_df.get_column("Scenario").unique())
         ]
 
-    return pl.DataFrame(rows)
+    correlation_df = pl.DataFrame(rows)
+    correlation_df.write_csv(path)
+    logger.info("Created energy-time correlation table '%s'", path)
+    return correlation_df
+
+
+# Effect Summary
+# Metrics of the effect summary table: energy, and the time and power it is the product of
+EFFECT_SUMMARY_METRICS = (Metric.PACKAGE_AND_DRAM, Metric.TIME, Metric.POWER)
+
+
+def generate_effect_summary_table(
+    path: Path,
+    comparison_data: pl.DataFrame,
+    jdk_versions: dict[str, JdkVersion],
+) -> pl.DataFrame:
+    """
+    Count the benchmarks whose median increased, decreased or changed inconclusively, per JDK and metric
+
+    Store the result in a CSV at `path` and return it.
+    """
+    # Polars sorts NaN above every number, so a NaN bound is made null to count as neither
+    ci_low = pl.col("Median_Difference_Percent_CI_Low").fill_nan(None)
+    ci_high = pl.col("Median_Difference_Percent_CI_High").fill_nan(None)
+    increase = (ci_low > 0).fill_null(False)
+    decrease = (ci_high < 0).fill_null(False)
+
+    estimate = pl.col(EffectSize.MEDIAN_DIFFERENCE_PERCENT)
+    finite_estimate = estimate.filter(estimate.is_finite())
+    effect_size_class = pl.col("Effect_Size_Class")
+    class_counts = [
+        (effect_size_class == name).sum().alias(name.capitalize())
+        for name in get_args(EffectSizeClass.__value__)
+    ]
+
+    jdks = sort_jdks(comparison_data.get_column("JDK").unique().to_list(), jdk_versions)
+    jdk_order = {jdk: index for index, jdk in enumerate(jdks)}
+    summary_df = (
+        comparison_data.filter(pl.col("Metric").is_in(EFFECT_SUMMARY_METRICS))
+        .group_by("Variant", "Scenario", "JDK", "Metric")
+        .agg(
+            pl.len().alias("Benchmarks"),
+            increase.sum().alias("Increase"),
+            decrease.sum().alias("Decrease"),
+            (~(increase | decrease)).sum().alias("Inconclusive"),
+            finite_estimate.median().alias("Median_Difference_Percent_Median"),
+            *class_counts,
+        )
+        .sort("Variant", "Scenario", pl.col("JDK").replace_strict(jdk_order), "Metric")
+    )
+
+    summary_df.write_csv(path)
+    logger.info("Created effect summary table '%s'", path)
+    return summary_df

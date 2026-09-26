@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Metrics
 class Metric(StrEnum):
-    """A measured quantity, named exactly as its column in `METRICS_SCHEMA`"""
+    """A measured or derived quantity of a benchmark execution"""
 
     PACKAGE = "Package"
     CORE = "Core"
@@ -25,15 +25,16 @@ class Metric(StrEnum):
     TIME = "Time"
     TEMPERATURE = "Temperature"
     MEMORY = "Memory"
+    # Average power of a run, derived as its energy over its time
+    POWER = "Power"
 
 
 # Schemas
-METRICS_SCHEMA = {
+MEASURED_METRICS_SCHEMA = {
     Metric.PACKAGE: pl.Float64,
     Metric.CORE: pl.Float64,
     Metric.UNCORE: pl.Float64,
     Metric.DRAM: pl.Float64,
-    Metric.PACKAGE_AND_DRAM: pl.Float64,
     Metric.TIME: pl.Float64,
     Metric.TEMPERATURE: pl.Float64,
     Metric.MEMORY: pl.Float64,
@@ -45,17 +46,20 @@ IDENTITY_COLUMNS_SCHEMA = {
     "Powercap": pl.Utf8,
 }
 
-MEASUREMENTS_SCHEMA = IDENTITY_COLUMNS_SCHEMA | METRICS_SCHEMA
+# The columns of a measurements file, in order
+MEASUREMENTS_SCHEMA = IDENTITY_COLUMNS_SCHEMA | MEASURED_METRICS_SCHEMA
 
-RAW_MEASUREMENTS_SCHEMA = {
-    k: v for k, v in MEASUREMENTS_SCHEMA.items() if k != Metric.PACKAGE_AND_DRAM
+# Metrics that no measurements file holds, derived from the measured ones once read
+ENERGY = pl.col(Metric.PACKAGE) + pl.col(Metric.DRAM)
+DERIVED_METRICS = {
+    Metric.PACKAGE_AND_DRAM: ENERGY,
+    Metric.POWER: ENERGY / pl.col(Metric.TIME),
 }
 
 
 # Columns
-METRICS = list(METRICS_SCHEMA.keys())
+METRICS = [*MEASURED_METRICS_SCHEMA, *DERIVED_METRICS]
 IDENTITY_COLUMNS = list(IDENTITY_COLUMNS_SCHEMA.keys())
-MEASUREMENTS_COLUMNS = list(MEASUREMENTS_SCHEMA.keys())
 
 
 # Idle runs prefix
@@ -196,32 +200,22 @@ def is_non_baseline_dir(path: Path) -> bool:
 
 
 def read_measurements(measurements_path: Path) -> pl.DataFrame:
-    """
-    Read raw measurements, with columns sorted per `MEASUREMENTS_SCHEMA`.
-
-    Derive the `PackageAndDRAM` column in memory if it's missing.
-    """
+    """Read raw measurements and derive the metrics that they do not hold"""
     columns = pl.scan_csv(measurements_path).collect_schema().names()
-    schema = (
-        MEASUREMENTS_SCHEMA if "PackageAndDRAM" in columns else RAW_MEASUREMENTS_SCHEMA
-    )
 
-    # `schema` names the columns by position and ignores the header,
+    # The schema names the columns by position and ignores the header,
     # so a header in any other order would mislabel them silently
-    expected = [str(column) for column in schema]
+    expected = [str(column) for column in MEASUREMENTS_SCHEMA]
     if columns != expected:
         raise ValueError(
             f"Unexpected columns in '{measurements_path}': "
             f"expected {expected}, found {columns}"
         )
 
-    df = pl.read_csv(measurements_path, schema=schema)
-    if "PackageAndDRAM" not in df.columns:
-        df = df.with_columns(
-            (pl.col("Package") + pl.col("DRAM")).alias("PackageAndDRAM")
-        )
-
-    return df.select(MEASUREMENTS_COLUMNS)
+    df = pl.read_csv(measurements_path, schema=MEASUREMENTS_SCHEMA)
+    return df.with_columns(
+        expression.alias(metric) for metric, expression in DERIVED_METRICS.items()
+    )
 
 
 def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:

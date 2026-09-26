@@ -25,6 +25,9 @@ and produces the following outputs:
    - Scenario-level heatmaps in the corresponding scenario directory.
    - Line plots of the change(s) in each benchmark across JDK versions, in
      each scenario directory.
+   - An `effect_summary.csv` under `<root>`, counting the benchmarks whose
+     median increased, decreased or changed inconclusively, per variant,
+     scenario, JDK, and metric (total energy, time, and power).
 
 3. Time and total energy correlation consisting of:
    - A Spearman rank-correlation table under `<root>`, quantifying the
@@ -59,6 +62,7 @@ from effect_sizes import (
     ComparisonRow,
     build_long_time_and_energy_table,
     compare_metric,
+    generate_effect_summary_table,
     generate_energy_time_correlation_table,
 )
 from jobs import Job, JobKey, run_jobs, worker_pool
@@ -102,6 +106,7 @@ LOG_FILE_NAME = "bench_stats.log"
 SUMMARY_FILE_NAME = "summary.csv"
 COMPARISON_FILE_NAME = "comparison.csv"
 ENERGY_TIME_CORRELATION_FILE_NAME = "energy_time_correlation.csv"
+EFFECT_SUMMARY_FILE_NAME = "effect_summary.csv"
 
 
 class ComparisonJobKey(NamedTuple):
@@ -190,19 +195,20 @@ def generate_benchmark_summary(measurements_path: Path) -> pl.DataFrame | None:
 def generate_combined_summary(
     implementation_dir: Path,
     summaries: list[pl.DataFrame],
-) -> None:
-    """Combine the benchmark summaries of an implementation directory into a single file"""
+) -> pl.DataFrame | None:
+    """Combine the benchmark summaries of an implementation directory, store the result in a CSV and return it"""
     output_path = implementation_dir / SUMMARY_FILE_NAME
     # Remove any stale summary, so none survives even if this one cannot be written
     output_path.unlink(missing_ok=True)
 
     if not summaries:
         logger.error("No summaries were generated in '%s'", implementation_dir)
-        return
+        return None
 
     combined_df = pl.concat(summaries, how="vertical")
     combined_df.write_csv(output_path)
     logger.info("Created combined summary '%s'", output_path)
+    return combined_df
 
 
 def load_comparison_pair(
@@ -348,48 +354,65 @@ def generate_comparisons(
 
 
 # Cross-Scenario Overview Statistics
-def overall_plot_jobs(
+def overall_stats_jobs(
     root_dir: Path,
     scenario_dirs: list[Path],
     comparisons: list[pl.DataFrame],
-) -> dict[JobKey, Job[None]]:
-    """Return the jobs responsible for producing overview statistics"""
+) -> dict[JobKey, Job[object]]:
+    """Return the jobs that write the overview tables and draw the overview plots"""
     correlation_path = root_dir / ENERGY_TIME_CORRELATION_FILE_NAME
-    # Remove any stale table, so none survives even if this one cannot be written
+    effect_summary_path = root_dir / EFFECT_SUMMARY_FILE_NAME
+    # Remove any stale tables, so none survives even if these cannot be written
     correlation_path.unlink(missing_ok=True)
+    effect_summary_path.unlink(missing_ok=True)
 
-    plot_jobs: dict[JobKey, Job[None]] = {}
+    jobs: dict[JobKey, Job[object]] = {}
     if not comparisons:
         logger.error(
             "No comparison data found across %s",
             [d.name for d in scenario_dirs],
         )
-        return plot_jobs
+        return jobs
 
     comparison_data = pl.concat(comparisons, how="vertical")
 
     jdk_versions = collect_jdk_versions(scenario_dirs)
+    jobs[effect_summary_path] = (
+        f"effect summary table '{effect_summary_path}'",
+        functools.partial(
+            generate_effect_summary_table,
+            effect_summary_path,
+            comparison_data,
+            jdk_versions,
+        ),
+    )
+
     # Merged as items, which mypy accepts for keys of any `JobKey` type
     heatmap_jobs = effect_size_heatmap_jobs(root_dir, comparison_data, jdk_versions)
-    plot_jobs |= heatmap_jobs.items()
+    jobs |= heatmap_jobs.items()
     for metric, effect_size in TREND_PLOTS:
         trend_jobs = trend_plot_jobs(
             root_dir, comparison_data, metric, effect_size, jdk_versions
         )
-        plot_jobs |= trend_jobs.items()
+        jobs |= trend_jobs.items()
 
     long_df = build_long_time_and_energy_table(comparison_data)
     if long_df.is_empty():
         logger.warning("No energy-time data found; skipping energy-time correlation")
-        return plot_jobs
+        return jobs
 
-    correlation_df = generate_energy_time_correlation_table(long_df)
-    correlation_df.write_csv(correlation_path)
-    logger.info("Created energy-time correlation table '%s'", correlation_path)
+    jobs[correlation_path] = (
+        f"energy-time correlation table '{correlation_path}'",
+        functools.partial(
+            generate_energy_time_correlation_table,
+            correlation_path,
+            long_df,
+        ),
+    )
 
     scatter_jobs = energy_time_scatter_plot_jobs(root_dir, long_df, jdk_versions)
-    plot_jobs |= scatter_jobs.items()
-    return plot_jobs
+    jobs |= scatter_jobs.items()
+    return jobs
 
 
 def generate_overall_stats(
@@ -400,7 +423,7 @@ def generate_overall_stats(
 ) -> int:
     """Generate overview statistics from the comparisons of every scenario, and return the number of jobs that failed"""
     _, n_failures = run_jobs(
-        overall_plot_jobs(root_dir, scenario_dirs, comparisons),
+        overall_stats_jobs(root_dir, scenario_dirs, comparisons),
         executor,
     )
     return n_failures

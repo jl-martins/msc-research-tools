@@ -14,6 +14,7 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 from matplotlib.axes import Axes
+from matplotlib.axis import Axis
 
 matplotlib.use("Agg")
 
@@ -113,6 +114,7 @@ class MetricMetadata(NamedTuple):
 METRIC_METADATA: dict[Metric, MetricMetadata] = {
     Metric.PACKAGE_AND_DRAM: MetricMetadata(name="Energy", symbol="E"),
     Metric.TIME: MetricMetadata(name="Time", symbol="T"),
+    Metric.POWER: MetricMetadata(name="Power", symbol="P"),
 }
 
 
@@ -253,6 +255,8 @@ HEATMAP_LIGHT_CELL_TEXT_COLOR = "black"
 HEATMAPS: tuple[tuple[Metric, EffectSize], ...] = (
     (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
     (Metric.PACKAGE_AND_DRAM, EffectSize.CLIFFS_DELTA),
+    (Metric.TIME, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
+    (Metric.POWER, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
 )
 
 
@@ -354,6 +358,39 @@ def export_plot(fig: plt.Figure, output_dir: Path, stem: str, description: str) 
 def remove_plot(output_dir: Path, stem: str) -> None:
     """Remove the PGF file named `stem` from `output_dir`, if it exists"""
     (output_dir / f"{stem}.pgf").unlink(missing_ok=True)
+
+
+def excludes_zero(df: pl.DataFrame, column: str) -> npt.NDArray[np.bool_]:
+    """Return whether the confidence interval of `column` excludes 0, for each row of `df`"""
+    # Compared in numpy, where NaN is neither above nor below 0, so that a missing
+    # or non-finite bound counts as including 0 (polars sorts NaN above every number)
+    ci_low = df.get_column(f"{column}_CI_Low").to_numpy()
+    ci_high = df.get_column(f"{column}_CI_High").to_numpy()
+    return (ci_low > 0) | (ci_high < 0)
+
+
+def scatter_by_significance(
+    ax: plt.Axes,
+    x: npt.NDArray[np.floating],
+    y: npt.NDArray[np.floating],
+    significant: npt.NDArray[np.bool_],
+) -> None:
+    """Draw points filled where `significant` holds and hollow elsewhere"""
+    ax.scatter(
+        x[significant], y[significant],
+        color=SCATTER_PLOT_MARKER_COLOR, s=15, zorder=2,
+    )  # fmt: skip
+    ax.scatter(
+        x[~significant], y[~significant],
+        facecolors="none", edgecolors=SCATTER_PLOT_MARKER_COLOR, s=15, zorder=2,
+    )  # fmt: skip
+
+
+def set_symlog_ticks(axis: Axis, linthresh: float) -> None:
+    """Tick a symmetric logarithmic axis at 0, ±linthresh and each tenfold step beyond"""
+    axis.set_major_locator(SymmetricalLogLocator(linthresh=linthresh, base=10))
+    # Read the ticks in the same terms as the values, not in scientific notation
+    axis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))
 
 
 # Effect Size Heatmaps
@@ -519,12 +556,7 @@ def render_effect_size_heatmap(
 
     label = effect_size_style.label_fmt.format(symbol=metric_metadata.symbol)
     if isinstance(norm, SymLogNorm):
-        colorbar.ax.yaxis.set_major_locator(
-            SymmetricalLogLocator(linthresh=HEATMAP_LINEAR_THRESHOLD, base=10)
-        )
-
-        # Ensure ticks are read in the same terms as the cells, not in scientific notation
-        colorbar.ax.yaxis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))  # fmt: skip
+        set_symlog_ticks(colorbar.ax.yaxis, HEATMAP_LINEAR_THRESHOLD)
 
     colorbar.set_label(label)
     fig.tight_layout()
@@ -660,10 +692,7 @@ def draw_forest_plot_graph(
     else:
         # Match the xscale of effect size heatmaps
         ax.set_xscale("symlog", linthresh=HEATMAP_LINEAR_THRESHOLD)
-        ax.xaxis.set_major_locator(
-            SymmetricalLogLocator(linthresh=HEATMAP_LINEAR_THRESHOLD, base=10)
-        )
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))
+        set_symlog_ticks(ax.xaxis, HEATMAP_LINEAR_THRESHOLD)
 
     ax.set_xlabel(label)
     ax.grid(axis="x", **GRID_STYLE)
@@ -875,24 +904,10 @@ def render_energy_time_scatter_panel(
     x = panel_df.get_column("Time_Diff_Percent").to_numpy()
     y = panel_df.get_column("Energy_Diff_Percent").to_numpy()
 
-    # Compared in numpy, where NaN is neither above nor below 0, so that a missing
-    # or non-finite bound counts as including 0 (polars sorts NaN above every number)
-    def excludes_zero(column: str) -> npt.NDArray[np.bool_]:
-        ci_low = panel_df.get_column(f"{column}_CI_Low").to_numpy()
-        ci_high = panel_df.get_column(f"{column}_CI_High").to_numpy()
-        return (ci_low > 0) | (ci_high < 0)
-
-    time_excludes_zero = excludes_zero("Time_Diff_Percent")
-    energy_excludes_zero = excludes_zero("Energy_Diff_Percent")
+    time_excludes_zero = excludes_zero(panel_df, "Time_Diff_Percent")
+    energy_excludes_zero = excludes_zero(panel_df, "Energy_Diff_Percent")
     significant = time_excludes_zero & energy_excludes_zero
-    ax.scatter(
-        x[significant], y[significant],
-        color=SCATTER_PLOT_MARKER_COLOR, s=15, zorder=2,
-    )  # fmt: skip
-    ax.scatter(
-        x[~significant], y[~significant],
-        facecolors="none", edgecolors=SCATTER_PLOT_MARKER_COLOR, s=15, zorder=2,
-    )  # fmt: skip
+    scatter_by_significance(ax, x, y, significant)
 
     ax.text(
         *SCATTER_PLOT_STAT_POSITION,
@@ -952,12 +967,8 @@ def render_energy_time_scatter_grid(
         # down a whole page and each one has to be readable on its own.
         ax.tick_params(labelbottom=True, labelleft=True)
 
-        # Read the ticks in the same terms as the points, not in scientific notation
         for axis in (ax.xaxis, ax.yaxis):
-            axis.set_major_locator(
-                SymmetricalLogLocator(linthresh=SCATTER_PLOT_LINEAR_THRESHOLD, base=10)
-            )
-            axis.set_major_formatter(FuncFormatter(lambda tick, _: f"{tick:g}"))
+            set_symlog_ticks(axis, SCATTER_PLOT_LINEAR_THRESHOLD)
 
     # The panels fill whole rows, so the grid can end with empty slots
     for ax in flat_axes[len(jdks) + 1 :]:

@@ -2,13 +2,18 @@
 
 import logging
 import math
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 import pytest
 
-from effect_sizes import compare_metric, generate_energy_time_correlation_table
+from effect_sizes import (
+    compare_metric,
+    generate_effect_summary_table,
+    generate_energy_time_correlation_table,
+)
 from measurements import SampleKey, get_jdk_labels, parse_jdk_version
 from plots import format_scatter_statistics, render_energy_time_scatter_panel
 from rank_corr import total_spearman
@@ -87,20 +92,19 @@ def test_median_difference_interval_matches_its_values_before_the_switch():
     assert row["Median_Difference_Percent_CI_High"] == pytest.approx(16.28877005347594)
 
 
-def test_correlation_table_counts_the_rows_and_the_benchmarks_of_each_scenario():
-    table = generate_energy_time_correlation_table(long_table(15))
-
+def test_correlation_counts_rows_and_benchmarks(tmp_path: Path):
+    path = tmp_path / "table.csv"
+    table = generate_energy_time_correlation_table(path, long_table(15))
     assert table.columns == CORRELATION_COLUMNS
     assert table.get_column("Scenario").to_list() == ["All", "Cold", "Warm"]
     assert table.get_column("N").to_list() == [60, 30, 30]
     assert table.get_column("Program_Count").to_list() == [15, 15, 15]
 
 
-def test_correlation_table_reports_the_clustered_correlation_of_its_rows():
+def test_correlation_is_clustered(tmp_path: Path):
     long_df = long_table(15)
-
-    row = generate_energy_time_correlation_table(long_df).row(0, named=True)
-
+    table = generate_energy_time_correlation_table(tmp_path / "table.csv", long_df)
+    row = table.row(0, named=True)
     expected = total_spearman(
         long_df.get_column("Time_Diff_Percent"),
         long_df.get_column("Energy_Diff_Percent"),
@@ -115,21 +119,24 @@ def test_correlation_table_reports_the_clustered_correlation_of_its_rows():
     )
 
 
-def test_correlation_table_leaves_a_subset_of_too_few_benchmarks_undefined(caplog):
+def test_correlation_of_too_few_benchmarks_is_undefined(tmp_path: Path, caplog):
+    path = tmp_path / "table.csv"
     with caplog.at_level(logging.WARNING):
-        row = generate_energy_time_correlation_table(long_table(2)).row(0, named=True)
+        table = generate_energy_time_correlation_table(path, long_table(2))
 
+    row = table.row(0, named=True)
     assert "Skipped the correlation of 8 rows of 2 benchmarks" in caplog.text
     assert math.isnan(row["Spearman_Rho"])
     assert (row["N"], row["Program_Count"]) == (8, 2)
 
 
-def test_correlation_table_leaves_a_constant_difference_undefined(caplog):
+def test_correlation_of_a_constant_difference_is_undefined(tmp_path: Path, caplog):
     long_df = long_table(15).with_columns(pl.lit(1.0).alias("Energy_Diff_Percent"))
-
+    path = tmp_path / "table.csv"
     with caplog.at_level(logging.WARNING):
-        row = generate_energy_time_correlation_table(long_df).row(0, named=True)
+        table = generate_energy_time_correlation_table(path, long_df)
 
+    row = table.row(0, named=True)
     assert "time or energy is constant" in caplog.text
     assert math.isnan(row["Spearman_Rho"])
     assert row["Program_Count"] == 15
@@ -221,3 +228,54 @@ def test_jdk_version_is_parsed_from_legacy_and_jep_223_version_strings(
     version_string, expected
 ):
     assert parse_jdk_version(f'openjdk version "{version_string}"') == expected
+
+
+def energy_comparisons(jdk: str, intervals: list[tuple[float, float]]) -> pl.DataFrame:
+    """Build the energy comparisons of one JDK, a benchmark per interval, estimated at its midpoint"""
+    return pl.DataFrame([
+        {
+            "Program": f"benchmark-{index}",
+            "Metric": "PackageAndDRAM",
+            "Variant": "streams",
+            "Scenario": "cold",
+            "JDK": jdk,
+            "Median_Difference_Percent": (low + high) / 2,
+            "Median_Difference_Percent_CI_Low": low,
+            "Median_Difference_Percent_CI_High": high,
+            "Effect_Size_Class": "negligible",
+        }
+        for index, (low, high) in enumerate(intervals)
+    ])  # fmt: skip
+
+
+def test_summary_counts_increases_decreases_and_inconclusive(tmp_path: Path):
+    # One interval per outcome, and one that could not be estimated
+    intervals = [(1.0, 9.0), (-9.0, -1.0), (-1.0, 3.0), (math.nan, math.nan)]
+    comparisons = energy_comparisons("temurin-17", intervals)
+    path = tmp_path / "summary.csv"
+    summary = generate_effect_summary_table(path, comparisons, JDK_VERSIONS)
+    assert summary.row(0, named=True) == {
+        "Variant": "streams",
+        "Scenario": "cold",
+        "JDK": "temurin-17",
+        "Metric": "PackageAndDRAM",
+        "Benchmarks": 4,
+        "Increase": 1,
+        "Decrease": 1,
+        "Inconclusive": 2,
+        "Median_Difference_Percent_Median": 1.0,
+        "Negligible": 4,
+        "Small": 0,
+        "Medium": 0,
+        "Large": 0,
+    }
+
+
+def test_summary_reports_benchmarks_per_jdk_in_version_order(tmp_path: Path):
+    corretto = energy_comparisons("corretto-21", [(1.0, 2.0)])
+    temurin = energy_comparisons("temurin-17", [(1.0, 2.0), (1.0, 2.0)])
+    comparisons = pl.concat([corretto, temurin])
+    path = tmp_path / "summary.csv"
+    summary = generate_effect_summary_table(path, comparisons, JDK_VERSIONS)
+    expected = [("temurin-17", 2), ("corretto-21", 1)]
+    assert summary.select("JDK", "Benchmarks").rows() == expected

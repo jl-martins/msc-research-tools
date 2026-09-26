@@ -10,7 +10,7 @@ import pytest
 
 import plots
 from bench_stats import run
-from measurements import load_and_clean_measurements
+from measurements import load_and_clean_measurements, read_measurements
 
 HEADER = [
     "Language", "Program", "Powercap", "Package", "Core",
@@ -147,8 +147,11 @@ def test_every_output_is_written(completed_run: Path):
         assert (variant_dir / forest_plot).exists()
 
     assert (completed_run / "energy_time_correlation.csv").exists()
+    assert (completed_run / "effect_summary.csv").exists()
     for stem in (
         "streams_energy_median_difference_percent_heatmap",
+        "streams_time_median_difference_percent_heatmap",
+        "streams_power_median_difference_percent_heatmap",
         "streams_energy_time_scatter_plot",
         "streams_energy_median_difference_percent_trend_plot",
     ):
@@ -183,6 +186,15 @@ def test_measurements_with_unexpected_columns_are_refused(
         assert load_and_clean_measurements(path) is None
 
     assert "Unexpected columns" in caplog.text
+
+
+def test_power_is_energy_over_time(tmp_path: Path):
+    path = tmp_path / "measurements.csv"
+    write_measurements(path, measurement_rows(np.random.default_rng(0), "alpha", 1.0))
+    df = read_measurements(path)
+    energy = df.get_column("Package") + df.get_column("DRAM")
+    time = df.get_column("Time")
+    assert df.get_column("Power").to_list() == (energy / time).to_list()
 
 
 def test_a_benchmark_with_unexpected_columns_is_left_out(tree: Path, caplog):
@@ -238,7 +250,8 @@ def test_stale_summary_is_removed(tree: Path):
     assert combined.get_column("Program").to_list() == ["beta", "gamma"]
 
 
-def test_stale_correlation_table_is_removed(tree: Path):
+@pytest.mark.parametrize("table", ["energy_time_correlation.csv", "effect_summary.csv"])
+def test_stale_overall_table_is_removed(tree: Path, table: str):
     run(tree, n_jobs=1, n_resamples=TEST_RESAMPLES)
     for jdk in JDKS:
         for benchmark in BENCHMARKS:
@@ -247,7 +260,7 @@ def test_stale_correlation_table_is_removed(tree: Path):
 
     run(tree, n_jobs=1, n_resamples=TEST_RESAMPLES)
 
-    assert not (tree / "energy_time_correlation.csv").exists()
+    assert not (tree / table).exists()
 
 
 def test_run_survives_a_failed_job(tree: Path, caplog, monkeypatch):
