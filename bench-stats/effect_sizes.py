@@ -25,8 +25,7 @@ logger = logging.getLogger(__name__)
 # One minus the confidence level of every confidence interval
 ALPHA = 0.05
 
-# How every IQR interpolates between order statistics. Summaries and comparisons
-# share it, so both report the same IQR of a sample.
+# How every IQR interpolates between order statistics
 IQR_INTERPOLATION_METHOD: Final = "linear"
 
 # Valid methods for computing bootstrap confidence intervals

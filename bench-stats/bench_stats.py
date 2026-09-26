@@ -9,16 +9,12 @@ This script recursively processes files matching:
 
 and produces the following outputs:
 
-1. Measurement summaries for energy, time, temperature, and memory,
-   namely:
-   - A `summary.csv` in each benchmark directory containing the median,
-     interquartile range (IQR), and sample count.
-   - A `summary.csv` in each implementation directory containing the same
-     statistics aggregated across that implementation's benchmarks.
-   - A `comparison.csv` comparing each variant with the `loops` baseline.
-     Comparisons include:
-       - the difference in medians and its bootstrap confidence interval;
-       - Cliff's delta and its confidence interval.
+1. A `comparison.csv` in each variant directory, comparing the energy, time,
+   power, temperature, and memory of each benchmark with the `loops` baseline.
+   Comparisons include:
+     - the median and interquartile range (IQR) of each implementation;
+     - the difference in medians and its bootstrap confidence interval;
+     - Cliff's delta and its confidence interval.
 
 2. Total energy (package + DRAM) statistics, including:
    - Forest plots for each variant in the corresponding JDK directory.
@@ -44,7 +40,6 @@ making results reproducible regardless of execution order or scheduling.
 
 import argparse
 import functools
-import itertools
 import logging
 import os
 import sys
@@ -58,7 +53,6 @@ import polars as pl
 
 from effect_sizes import (
     BOOTSTRAP_DEFAULT_N_RESAMPLES,
-    IQR_INTERPOLATION_METHOD,
     ComparisonRow,
     build_long_time_and_energy_table,
     compare_metric,
@@ -68,7 +62,6 @@ from effect_sizes import (
 from jobs import Job, JobKey, run_jobs, worker_pool
 from measurements import (
     BASELINE_DIR_NAME,
-    IDENTITY_COLUMNS,
     MEASUREMENTS_FILE_NAME,
     METRICS,
     SampleKey,
@@ -91,19 +84,8 @@ from plots import (
 logger = logging.getLogger(__name__)
 
 
-# Summary Statistics
-SUMMARY_STATS = ["Median", "IQR", "Count"]
-
-SUMMARY_COLUMNS = IDENTITY_COLUMNS + [
-    f"{metric}_{stat}" for metric, stat in itertools.product(METRICS, SUMMARY_STATS)
-]
-
-# Fewer runs than this make a summary statistic unreliable
-MIN_ADVISED_SAMPLE_SIZE = 10
-
 # File names
 LOG_FILE_NAME = "bench_stats.log"
-SUMMARY_FILE_NAME = "summary.csv"
 COMPARISON_FILE_NAME = "comparison.csv"
 ENERGY_TIME_CORRELATION_FILE_NAME = "energy_time_correlation.csv"
 EFFECT_SUMMARY_FILE_NAME = "effect_summary.csv"
@@ -140,108 +122,14 @@ def setup_logging(root_dir: Path, verbose: bool = False) -> None:
     root_logger.addHandler(file_handler)
 
 
-# Summarization
-def generate_benchmark_summary(measurements_path: Path) -> pl.DataFrame | None:
-    """Summarize raw measurements, store the result in a CSV and return it"""
-    summary_path = measurements_path.parent / SUMMARY_FILE_NAME
-    # Remove any stale summary, so none survives even if this one cannot be written
-    summary_path.unlink(missing_ok=True)
-
-    active_runs_df = load_and_clean_measurements(measurements_path)
-    if active_runs_df is None or active_runs_df.is_empty():
-        logger.warning("Skipping empty data frame from '%s'...", measurements_path)
-        return None
-
-    logger.info("Generating summary for '%s'", measurements_path)
-    aggs = []
-    for metric in METRICS:
-        p25 = pl.col(metric).quantile(0.25, interpolation=IQR_INTERPOLATION_METHOD)
-        p75 = pl.col(metric).quantile(0.75, interpolation=IQR_INTERPOLATION_METHOD)
-        aggs.extend(
-            [
-                pl.col(metric).median().alias(f"{metric}_Median"),
-                (p75 - p25).alias(f"{metric}_IQR"),
-                pl.col(metric).count().alias(f"{metric}_Count"),
-            ]
-        )
-
-    summary_df = active_runs_df.group_by(IDENTITY_COLUMNS).agg(aggs)
-    if len(summary_df) > 1:
-        conflicting_values = summary_df.select(IDENTITY_COLUMNS).to_dicts()
-        formatted_conflicts = "\n  - ".join([str(row) for row in conflicting_values])
-        raise ValueError(
-            f"Multiple combinations of {IDENTITY_COLUMNS} found in {measurements_path}.\n"
-            f"Expected 1 unique combination, but found {len(summary_df)}:\n"
-            f"  - {formatted_conflicts}"
-        )
-
-    if summary_df.is_empty():
-        logger.warning("Empty summary for '%s'", measurements_path)
-        return None
-
-    for metric in METRICS:
-        sample_size = summary_df.get_column(f"{metric}_Count")[0]
-        if sample_size < MIN_ADVISED_SAMPLE_SIZE:
-            logger.warning(
-                "%s: %s has only %d samples", measurements_path, metric, sample_size
-            )
-
-    summary_df = summary_df.select(SUMMARY_COLUMNS)
-    summary_df.write_csv(summary_path)
-    logger.info("Created summary '%s'", summary_path)
-    return summary_df
-
-
-def generate_combined_summary(
-    implementation_dir: Path,
-    summaries: list[pl.DataFrame],
-) -> pl.DataFrame | None:
-    """Combine the benchmark summaries of an implementation directory, store the result in a CSV and return it"""
-    output_path = implementation_dir / SUMMARY_FILE_NAME
-    # Remove any stale summary, so none survives even if this one cannot be written
-    output_path.unlink(missing_ok=True)
-
-    if not summaries:
-        logger.error("No summaries were generated in '%s'", implementation_dir)
-        return None
-
-    combined_df = pl.concat(summaries, how="vertical")
-    combined_df.write_csv(output_path)
-    logger.info("Created combined summary '%s'", output_path)
-    return combined_df
-
-
-def load_comparison_pair(
-    baseline_dir: Path,
-    variant_dir: Path,
-    benchmark: str,
-) -> tuple[pl.DataFrame, pl.DataFrame] | None:
-    """Load measurements for a benchmark from both baseline and variant dirs"""
-    baseline_measurements_path = baseline_dir / benchmark / MEASUREMENTS_FILE_NAME
-    variant_measurements_path = variant_dir / benchmark / MEASUREMENTS_FILE_NAME
-
-    baseline_df = load_and_clean_measurements(baseline_measurements_path)
-    variant_df = load_and_clean_measurements(variant_measurements_path)
-
-    if baseline_df is None or variant_df is None:
-        return None
-    else:
-        return baseline_df, variant_df
-
-
-def compare_benchmark(key: ComparisonJobKey, n_resamples: int) -> list[ComparisonRow]:
+# Comparison
+def compare_benchmark(
+    sample_key: SampleKey,
+    baseline_df: pl.DataFrame,
+    variant_df: pl.DataFrame,
+    n_resamples: int,
+) -> list[ComparisonRow]:
     """Compare every metric of one benchmark between a baseline and a variant"""
-    comparison_pair = load_comparison_pair(
-        key.baseline_dir,
-        key.variant_dir,
-        key.benchmark,
-    )
-    if comparison_pair is None:
-        return []
-
-    baseline_df, variant_df = comparison_pair
-    sample_key = SampleKey.from_benchmark_directory(key.variant_dir / key.benchmark)
-
     comparison_rows: list[ComparisonRow] = []
     for metric in METRICS:
         x = baseline_df[metric].drop_nulls().to_numpy()
@@ -273,11 +161,15 @@ def build_comparison_frame(
 
 def generate_comparisons(
     root_dir: Path,
+    measurements: dict[Path, pl.DataFrame],
     executor: Executor | None,
     n_resamples: int,
 ) -> tuple[list[pl.DataFrame], int]:
     """
     Compare each benchmark variant with the baseline and store the results in a CSV in the variant's directory.
+
+    `measurements` holds the loaded measurements by benchmark directory. A benchmark
+    whose measurements are missing on either side is left out.
 
     Return the comparisons of the variants, each tagged with its scenario and JDK,
     and the number of jobs that failed.
@@ -305,20 +197,28 @@ def generate_comparisons(
             job_keys += [
                 ComparisonJobKey(baseline_dir, variant_dir, benchmark)
                 for benchmark in benchmarks
+                if baseline_dir / benchmark in measurements
+                and variant_dir / benchmark in measurements
             ]
 
     # Each job seeds its bootstraps from the sample it compares, so its results are
     # independent of the process that runs it. The results are returned in job order.
-    job_rows, n_failures = run_jobs(
-        {
-            job_key: (
-                f"comparison of '{job_key.variant_dir / job_key.benchmark}'",
-                functools.partial(compare_benchmark, job_key, n_resamples),
-            )
-            for job_key in job_keys
-        },
-        executor,
-    )
+    comparison_jobs: dict[ComparisonJobKey, Job[list[ComparisonRow]]] = {}
+    for job_key in job_keys:
+        baseline_benchmark_dir = job_key.baseline_dir / job_key.benchmark
+        variant_benchmark_dir = job_key.variant_dir / job_key.benchmark
+        comparison_jobs[job_key] = (
+            f"comparison of '{variant_benchmark_dir}'",
+            functools.partial(
+                compare_benchmark,
+                SampleKey.from_benchmark_directory(variant_benchmark_dir),
+                measurements[baseline_benchmark_dir],
+                measurements[variant_benchmark_dir],
+                n_resamples,
+            ),
+        )
+
+    job_rows, n_failures = run_jobs(comparison_jobs, executor)
     rows_by_variant: dict[Path, list[ComparisonRow]] = defaultdict(list)
     for job_key, comparison_rows in job_rows.items():
         rows_by_variant[job_key.variant_dir] += comparison_rows
@@ -447,60 +347,46 @@ def generate_stats(
 
     logger.info("Processing root directory '%s'...", root_dir)
 
-    # 1. Generate individual benchmark summaries
+    # 1. Find measurement files and warn about those outside a benchmark directory
     measurement_files = sorted(root_dir.rglob(MEASUREMENTS_FILE_NAME))
     logger.info("Found %d %s files", len(measurement_files), MEASUREMENTS_FILE_NAME)
 
-    benchmark_files: list[Path] = []
     for measurements_path in measurement_files:
-        if len(measurements_path.relative_to(root_dir).parts) == 4:
-            benchmark_files.append(measurements_path)
-        else:
+        if len(measurements_path.relative_to(root_dir).parts) != 4:
             logger.warning(
                 "Skipping '%s' because it does not match the expected "
                 "directory structure (<root_dir>/<jdk>/<implementation>/<benchmark>/)...",
                 measurements_path,
             )
 
-    benchmark_summaries, n_summary_failures = run_jobs(
-        {
-            measurements_path: (
-                f"summary of '{measurements_path}'",
-                functools.partial(generate_benchmark_summary, measurements_path),
-            )
-            for measurements_path in benchmark_files
-        },
-        executor,
-    )
-    summaries: dict[Path, list[pl.DataFrame]] = defaultdict(list)
-    for measurements_path, summary in benchmark_summaries.items():
-        if summary is not None:
-            summaries[measurements_path.parent.parent].append(summary)
-
-    # 2. Concatenate benchmark summaries per implementation (loops, sequential streams or parallel streams)
-    implementation_dirs = [
-        implementation_dir
-        for jdk_dir in sorted(d for d in root_dir.iterdir() if d.is_dir())
-        for implementation_dir in sorted(d for d in jdk_dir.iterdir() if d.is_dir())
+    # 2. Load the measurements of every benchmark directory once, so each file is checked once
+    benchmark_dirs = [
+        benchmark_dir
+        for jdk_dir in sorted(filter(Path.is_dir, root_dir.iterdir()))
+        for implementation_dir in sorted(filter(Path.is_dir, jdk_dir.iterdir()))
+        for benchmark_dir in sorted(filter(Path.is_dir, implementation_dir.iterdir()))
     ]
-    _, n_combined_failures = run_jobs(
+    loaded, n_load_failures = run_jobs(
         {
-            implementation_dir: (
-                f"combined summary of '{implementation_dir}'",
+            benchmark_dir: (
+                f"loading of '{benchmark_dir / MEASUREMENTS_FILE_NAME}'",
                 functools.partial(
-                    generate_combined_summary,
-                    implementation_dir,
-                    summaries[implementation_dir],
+                    load_and_clean_measurements,
+                    benchmark_dir / MEASUREMENTS_FILE_NAME,
                 ),
             )
-            for implementation_dir in implementation_dirs
+            for benchmark_dir in benchmark_dirs
         },
         executor,
     )
+    measurements = {
+        benchmark_dir: df for benchmark_dir, df in loaded.items() if df is not None
+    }
 
     # 3. Generate comparative statistics
     comparisons, n_comparison_failures = generate_comparisons(
         root_dir,
+        measurements,
         executor,
         n_resamples,
     )
@@ -510,8 +396,7 @@ def generate_stats(
         "Processing complete. Processed %d measurement files.",
         len(measurement_files),
     )
-    n_failures = n_summary_failures + n_combined_failures + n_comparison_failures
-    return comparisons, n_failures
+    return comparisons, n_load_failures + n_comparison_failures
 
 
 def run(

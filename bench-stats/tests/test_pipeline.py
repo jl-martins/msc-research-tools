@@ -2,6 +2,7 @@
 
 import logging
 import re
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -135,12 +136,6 @@ def completed_run(tmp_path_factory) -> Path:
 def test_every_output_is_written(completed_run: Path):
     scenario_dir = completed_run / SCENARIO
     for jdk in JDKS:
-        for implementation in IMPLEMENTATIONS:
-            implementation_dir = scenario_dir / jdk / implementation
-            assert (implementation_dir / "summary.csv").exists()
-            for benchmark in BENCHMARKS:
-                assert (implementation_dir / benchmark / "summary.csv").exists()
-
         variant_dir = scenario_dir / jdk / "streams"
         forest_plot = "energy_median_difference_percent_forest_plot.pgf"
         assert (variant_dir / "comparison.csv").exists()
@@ -206,23 +201,36 @@ def test_a_benchmark_with_unexpected_columns_is_left_out(tree: Path, caplog):
 
     comparison = pl.read_csv(jdk_dir / "streams" / "comparison.csv")
     assert "Unexpected columns" in caplog.text
-    assert not (jdk_dir / "loops/alpha/summary.csv").exists()
     assert sorted(comparison.get_column("Program").unique()) == ["beta", "gamma"]
 
 
-def test_summaries_and_comparisons_report_the_same_iqr(completed_run: Path):
-    for jdk in JDKS:
-        jdk_dir = completed_run / SCENARIO / jdk
-        comparison = pl.read_csv(jdk_dir / "streams" / "comparison.csv")
-        for row in comparison.iter_rows(named=True):
-            iqr_column = f"{row['Metric']}_IQR"
-            for implementation, compared in (
-                ("loops", "Loops_IQR"),
-                ("streams", "Variant_IQR"),
-            ):
-                summary_path = jdk_dir / implementation / row["Program"] / "summary.csv"
-                summary = pl.read_csv(summary_path)
-                assert summary.get_column(iqr_column)[0] == pytest.approx(row[compared])
+def test_few_samples_warning(tree: Path, caplog):
+    jdk_dir = tree / SCENARIO / "temurin-17"
+    # A second variant, so the baseline is compared twice but warned about once
+    shutil.copytree(jdk_dir / "streams", jdk_dir / "parallel-streams")
+    path = jdk_dir / "loops" / "alpha" / "measurements.csv"
+    rows = measurement_rows(np.random.default_rng(1), "alpha", 1.0)
+    write_measurements(path, rows[:5])
+
+    with caplog.at_level(logging.WARNING):
+        run(tree, n_jobs=1, n_resamples=TEST_RESAMPLES)
+
+    assert caplog.text.count(f"{path}: Time has only 5 samples") == 1
+
+
+def test_mixed_programs_fail_to_load(tree: Path, caplog):
+    jdk_dir = tree / SCENARIO / "temurin-17"
+    rng = np.random.default_rng(1)
+    rows = measurement_rows(rng, "alpha", 1.0) + measurement_rows(rng, "beta", 1.0)
+    write_measurements(jdk_dir / "loops" / "alpha" / "measurements.csv", rows)
+
+    with caplog.at_level(logging.ERROR):
+        n_failures = run(tree, n_jobs=1, n_resamples=TEST_RESAMPLES)
+
+    comparison = pl.read_csv(jdk_dir / "streams" / "comparison.csv")
+    assert n_failures == 1
+    assert caplog.text.count("Multiple combinations") == 1
+    assert sorted(comparison.get_column("Program").unique()) == ["beta", "gamma"]
 
 
 def test_stale_comparison_is_removed(tree: Path):
@@ -236,18 +244,6 @@ def test_stale_comparison_is_removed(tree: Path):
     correlation = pl.read_csv(tree / "energy_time_correlation.csv")
     assert not (streams_dir / "comparison.csv").exists()
     assert correlation.get_column("N").to_list() == [3, 3]
-
-
-def test_stale_summary_is_removed(tree: Path):
-    run(tree, n_jobs=1, n_resamples=TEST_RESAMPLES)
-    loops_dir = tree / SCENARIO / "temurin-17" / "loops"
-    write_invalid_measurements(loops_dir / "alpha" / "measurements.csv")
-
-    run(tree, n_jobs=1, n_resamples=TEST_RESAMPLES)
-
-    combined = pl.read_csv(loops_dir / "summary.csv")
-    assert not (loops_dir / "alpha" / "summary.csv").exists()
-    assert combined.get_column("Program").to_list() == ["beta", "gamma"]
 
 
 @pytest.mark.parametrize("table", ["energy_time_correlation.csv", "effect_summary.csv"])

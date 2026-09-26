@@ -65,6 +65,9 @@ IDENTITY_COLUMNS = list(IDENTITY_COLUMNS_SCHEMA.keys())
 # Idle runs prefix
 IDLE_RUN_PREFIX = "idle_"
 
+# Fewer runs than this make a comparison unreliable
+MIN_ADVISED_SAMPLE_SIZE = 10
+
 
 # File and directory names
 MEASUREMENTS_FILE_NAME = "measurements.csv"
@@ -219,7 +222,12 @@ def read_measurements(measurements_path: Path) -> pl.DataFrame:
 
 
 def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:
-    """Load raw measurements, clean them and return the result as a data frame"""
+    """
+    Load raw measurements, clean them and return the result as a data frame.
+
+    Warn about every metric with too few values, and raise a `ValueError` if the
+    runs belong to more than one program.
+    """
     try:
         df = read_measurements(measurements_path)
         active_runs_df = df.filter(~pl.col("Program").str.starts_with(IDLE_RUN_PREFIX))
@@ -240,11 +248,32 @@ def load_and_clean_measurements(measurements_path: Path) -> pl.DataFrame | None:
                 measurements_path,
             )
 
-        return active_runs_df
-
     except OSError, ValueError, pl.exceptions.PolarsError:
         logger.exception("Error when reading or cleaning '%s'", measurements_path)
         return None
+
+    if active_runs_df.is_empty():
+        logger.warning("Skipping empty data frame from '%s'...", measurements_path)
+        return None
+
+    # Raised outside the `try`, so the job that loads the file counts as failed
+    identities = active_runs_df.select(IDENTITY_COLUMNS).unique(maintain_order=True)
+    if len(identities) > 1:
+        formatted_identities = "\n  - ".join(str(row) for row in identities.to_dicts())
+        raise ValueError(
+            f"Multiple combinations of {IDENTITY_COLUMNS} found in {measurements_path}.\n"
+            f"Expected 1 unique combination, but found {len(identities)}:\n"
+            f"  - {formatted_identities}"
+        )
+
+    for metric in METRICS:
+        sample_size = active_runs_df.get_column(metric).count()
+        if sample_size < MIN_ADVISED_SAMPLE_SIZE:
+            logger.warning(
+                "%s: %s has only %d samples", measurements_path, metric, sample_size
+            )
+
+    return active_runs_df
 
 
 def common_benchmarks(baseline_dir: Path, variant_dir: Path) -> list[str]:
