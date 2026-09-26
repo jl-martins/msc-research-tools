@@ -34,7 +34,7 @@ and produces the following outputs:
      correlation as well as its number of benchmarks.
    - Scatter plots of those changes in each scenario directory.
 
-Bootstrap resampling is deterministically seeded from the resampled data,
+Bootstrap resampling is deterministically seeded from the identity of each sample,
 making results reproducible regardless of execution order or scheduling.
 """
 
