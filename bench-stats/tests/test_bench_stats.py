@@ -10,8 +10,9 @@ import polars as pl
 import pytest
 
 from effect_sizes import (
+    ConfidenceInterval,
     compare_metric,
-    generate_effect_summary_table,
+    generate_energy_summary_table,
     generate_energy_time_correlation_table,
 )
 from measurements import SampleKey, get_jdk_labels, parse_jdk_version
@@ -239,8 +240,15 @@ def test_jdk_version_is_parsed_from_legacy_and_jep_223_version_strings(
     assert parse_jdk_version(f'openjdk version "{version_string}"') == expected
 
 
-def energy_comparisons(jdk: str, intervals: list[tuple[float, float]]) -> pl.DataFrame:
-    """Build the energy comparisons of one JDK, a benchmark per interval, estimated at its midpoint"""
+def energy_comparisons(
+    jdk: str,
+    estimates: list[float],
+    intervals: list[ConfidenceInterval] | None = None,
+) -> pl.DataFrame:
+    """Build the energy comparisons of one JDK, a benchmark per estimate, each interval 1 either side of it by default"""
+    if intervals is None:
+        intervals = [ConfidenceInterval(value - 1, value + 1) for value in estimates]
+
     return pl.DataFrame([
         {
             "Program": f"benchmark-{index}",
@@ -248,43 +256,65 @@ def energy_comparisons(jdk: str, intervals: list[tuple[float, float]]) -> pl.Dat
             "Variant": "streams",
             "Scenario": "cold",
             "JDK": jdk,
-            "Median_Difference_Percent": (low + high) / 2,
-            "Median_Difference_Percent_CI_Low": low,
-            "Median_Difference_Percent_CI_High": high,
-            "Effect_Size_Class": "negligible",
+            "Median_Difference_Percent": estimate,
+            "Median_Difference_Percent_CI_Low": interval.low,
+            "Median_Difference_Percent_CI_High": interval.high,
         }
-        for index, (low, high) in enumerate(intervals)
+        for index, (estimate, interval) in enumerate(zip(estimates, intervals, strict=True))
     ])  # fmt: skip
 
 
 def test_summary_counts_increases_decreases_and_inconclusive(tmp_path: Path):
     # One interval per outcome, and one that could not be estimated
-    intervals = [(1.0, 9.0), (-9.0, -1.0), (-1.0, 3.0), (math.nan, math.nan)]
-    comparisons = energy_comparisons("temurin-17", intervals)
-    path = tmp_path / "summary.csv"
-    summary = generate_effect_summary_table(path, comparisons, JDK_VERSIONS)
-    assert summary.row(0, named=True) == {
-        "Variant": "streams",
-        "Scenario": "cold",
-        "JDK": "temurin-17",
-        "Metric": "PackageAndDRAM",
-        "Benchmarks": 4,
-        "Increase": 1,
-        "Decrease": 1,
-        "Inconclusive": 2,
-        "Median_Difference_Percent_Median": 1.0,
-        "Negligible": 4,
-        "Small": 0,
-        "Medium": 0,
-        "Large": 0,
-    }
+    comparisons = energy_comparisons(
+        "temurin-17",
+        [5.0, -5.0, 1.0, math.nan],
+        [
+            ConfidenceInterval(1.0, 9.0),
+            ConfidenceInterval(-9.0, -1.0),
+            ConfidenceInterval(-1.0, 3.0),
+            ConfidenceInterval(math.nan, math.nan),
+        ],
+    )
+    summary = generate_energy_summary_table(tmp_path / "summary.csv", comparisons)
+    row = summary.row(0, named=True)
+    assert row["Benchmarks"] == 3
+    assert row["Median_Difference_Percent"] == 1.0
+    assert (row["Increase"], row["Decrease"], row["Inconclusive"]) == (1, 1, 2)
 
 
-def test_summary_reports_benchmarks_per_jdk_in_version_order(tmp_path: Path):
-    corretto = energy_comparisons("corretto-21", [(1.0, 2.0)])
-    temurin = energy_comparisons("temurin-17", [(1.0, 2.0), (1.0, 2.0)])
-    comparisons = pl.concat([corretto, temurin])
-    path = tmp_path / "summary.csv"
-    summary = generate_effect_summary_table(path, comparisons, JDK_VERSIONS)
-    expected = [("temurin-17", 2), ("corretto-21", 1)]
-    assert summary.select("JDK", "Benchmarks").rows() == expected
+def test_summary_weighs_benchmarks_equally(tmp_path: Path):
+    # Pooled, the benchmark under three JDKs would place the median at 10
+    comparisons = pl.concat([
+        energy_comparisons("temurin-17", [10.0, 0.0, 1.0]),
+        energy_comparisons("temurin-21", [10.0]),
+        energy_comparisons("temurin-25", [10.0]),
+    ])  # fmt: skip
+    summary = generate_energy_summary_table(tmp_path / "summary.csv", comparisons)
+    assert summary.row(0, named=True)["Median_Difference_Percent"] == 1.0
+
+
+def test_summary_interval_spans_order_statistics(tmp_path: Path):
+    # Of 15 benchmarks, the 4th and 12th smallest bound the 95% interval
+    comparisons = energy_comparisons("temurin-17", [float(n) for n in range(1, 16)])
+    summary = generate_energy_summary_table(tmp_path / "summary.csv", comparisons)
+    row = summary.row(0, named=True)
+    assert row["Median_Difference_Percent_CI_Low"] == 4.0
+    assert row["Median_Difference_Percent_CI_High"] == 12.0
+
+
+def test_summary_interval_of_few_benchmarks_is_undefined(tmp_path: Path):
+    comparisons = energy_comparisons("temurin-17", [float(n) for n in range(1, 6)])
+    summary = generate_energy_summary_table(tmp_path / "summary.csv", comparisons)
+    row = summary.row(0, named=True)
+    assert math.isnan(row["Median_Difference_Percent_CI_Low"])
+    assert math.isnan(row["Median_Difference_Percent_CI_High"])
+
+
+def test_summary_ends_with_every_scenario(tmp_path: Path):
+    cold = energy_comparisons("temurin-17", [5.0, 7.0])
+    warm = cold.with_columns(pl.lit("warm").alias("Scenario"))
+    comparisons = pl.concat([warm, cold])
+    summary = generate_energy_summary_table(tmp_path / "summary.csv", comparisons)
+    expected = [("Cold", 2, 2), ("Warm", 2, 2), ("All", 2, 4)]
+    assert summary.select("Scenario", "Benchmarks", "Increase").rows() == expected

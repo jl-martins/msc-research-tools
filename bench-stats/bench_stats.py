@@ -21,9 +21,10 @@ and produces the following outputs:
    - Scenario-level heatmaps in the corresponding scenario directory.
    - Line plots of the change(s) in each benchmark across JDK versions, in
      each scenario directory.
-   - An `effect_summary.csv` under `<root>`, counting the benchmarks whose
-     median increased, decreased or changed inconclusively, per variant,
-     scenario, JDK, and metric (total energy, time, and power).
+   - An `energy_summary.csv` under `<root>`, giving the median of the
+     benchmark medians of the change in total energy and its confidence
+     interval, per variant and scenario. It also counts the comparisons whose
+     median increased, decreased or changed inconclusively.
 
 3. Time and total energy correlation consisting of:
    - A Spearman rank-correlation table under `<root>`, quantifying the
@@ -56,7 +57,7 @@ from effect_sizes import (
     ComparisonRow,
     build_long_time_and_energy_table,
     compare_metric,
-    generate_effect_summary_table,
+    generate_energy_summary_table,
     generate_energy_time_correlation_table,
 )
 from jobs import Job, JobKey, run_jobs, worker_pool
@@ -88,7 +89,7 @@ logger = logging.getLogger(__name__)
 LOG_FILE_NAME = "bench_stats.log"
 COMPARISON_FILE_NAME = "comparison.csv"
 ENERGY_TIME_CORRELATION_FILE_NAME = "energy_time_correlation.csv"
-EFFECT_SUMMARY_FILE_NAME = "effect_summary.csv"
+ENERGY_SUMMARY_FILE_NAME = "energy_summary.csv"
 
 
 class ComparisonJobKey(NamedTuple):
@@ -261,10 +262,10 @@ def overall_stats_jobs(
 ) -> dict[JobKey, Job[object]]:
     """Return the jobs that write the overview tables and draw the overview plots"""
     correlation_path = root_dir / ENERGY_TIME_CORRELATION_FILE_NAME
-    effect_summary_path = root_dir / EFFECT_SUMMARY_FILE_NAME
+    energy_summary_path = root_dir / ENERGY_SUMMARY_FILE_NAME
     # Remove any stale tables, so none survives even if these cannot be written
     correlation_path.unlink(missing_ok=True)
-    effect_summary_path.unlink(missing_ok=True)
+    energy_summary_path.unlink(missing_ok=True)
 
     jobs: dict[JobKey, Job[object]] = {}
     if not comparisons:
@@ -277,13 +278,12 @@ def overall_stats_jobs(
     comparison_data = pl.concat(comparisons, how="vertical")
 
     jdk_versions = collect_jdk_versions(scenario_dirs)
-    jobs[effect_summary_path] = (
-        f"effect summary table '{effect_summary_path}'",
+    jobs[energy_summary_path] = (
+        f"energy summary table '{energy_summary_path}'",
         functools.partial(
-            generate_effect_summary_table,
-            effect_summary_path,
+            generate_energy_summary_table,
+            energy_summary_path,
             comparison_data,
-            jdk_versions,
         ),
     )
 

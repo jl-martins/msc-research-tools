@@ -9,14 +9,21 @@ import math
 import warnings
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, Literal, NamedTuple, Protocol, TypedDict, get_args
+from typing import Any, Final, Literal, NamedTuple, Protocol, TypedDict
 
 import numpy as np
 import numpy.typing as npt
 import polars as pl
-from scipy.stats import DegenerateDataWarning, bootstrap, iqr, norm, rankdata
+from scipy.stats import (
+    DegenerateDataWarning,
+    bootstrap,
+    iqr,
+    norm,
+    quantile_test,
+    rankdata,
+)
 
-from measurements import JdkVersion, Metric, SampleKey, sort_jdks
+from measurements import Metric, SampleKey
 from rank_corr import ClusteredCorrelation, total_spearman
 
 logger = logging.getLogger(__name__)
@@ -97,8 +104,8 @@ class ComparisonRow(TypedDict):
     Effect_Size_Class: EffectSizeClass
 
 
-# Names every scenario at once, in the energy-time correlation table
-ENERGY_TIME_CORRELATION_ALL_LABEL = "All"
+# Names every scenario at once, in the overview tables
+ALL_SCENARIOS_LABEL = "All"
 
 
 # Statistical Comparison
@@ -450,9 +457,7 @@ def generate_energy_time_correlation_table(
     rows = []
     for variant in sorted(long_df.get_column("Variant").unique()):
         variant_df = long_df.filter(pl.col("Variant") == variant)
-        rows.append(
-            spearman_row(variant, ENERGY_TIME_CORRELATION_ALL_LABEL, variant_df)
-        )
+        rows.append(spearman_row(variant, ALL_SCENARIOS_LABEL, variant_df))
         rows += [
             spearman_row(
                 variant,
@@ -468,51 +473,77 @@ def generate_energy_time_correlation_table(
     return correlation_df
 
 
-# Effect Summary
-# Metrics of the effect summary table: energy, and the time and power it is the product of
-EFFECT_SUMMARY_METRICS = (Metric.PACKAGE_AND_DRAM, Metric.TIME, Metric.POWER)
-
-
-def generate_effect_summary_table(
-    path: Path,
-    comparison_data: pl.DataFrame,
-    jdk_versions: dict[str, JdkVersion],
-) -> pl.DataFrame:
+# Energy Summary
+def energy_summary_row(
+    variant: str,
+    scenario: str,
+    subset: pl.DataFrame,
+) -> dict[str, Any]:
     """
-    Count the benchmarks whose median increased, decreased or changed inconclusively, per JDK and metric
+    Compute one row of the energy summary table
 
-    Store the result in a CSV at `path` and return it.
+    Each benchmark is first reduced to the median of its median energy differences, so
+    every benchmark weighs the same, regardless of how many JDKs and scenarios it recurs
+    under. The interval of the median of these benchmark medians comes from their order
+    statistics, which assumes only that the benchmarks are independent.
     """
+    estimate = pl.col(EffectSize.MEDIAN_DIFFERENCE_PERCENT)
+    benchmark_medians = (
+        subset.filter(estimate.is_finite())
+        .group_by("Program")
+        .agg(estimate.median())
+        .get_column(EffectSize.MEDIAN_DIFFERENCE_PERCENT)
+    )
+    test = quantile_test(benchmark_medians.to_numpy(), p=0.5)
+    ci = test.confidence_interval(1 - ALPHA)
+
     # Polars sorts NaN above every number, so a NaN bound is made null to count as neither
-    ci_low = pl.col("Median_Difference_Percent_CI_Low").fill_nan(None)
-    ci_high = pl.col("Median_Difference_Percent_CI_High").fill_nan(None)
+    ci_low = subset.get_column("Median_Difference_Percent_CI_Low").fill_nan(None)
+    ci_high = subset.get_column("Median_Difference_Percent_CI_High").fill_nan(None)
     increase = (ci_low > 0).fill_null(False)
     decrease = (ci_high < 0).fill_null(False)
 
-    estimate = pl.col(EffectSize.MEDIAN_DIFFERENCE_PERCENT)
-    finite_estimate = estimate.filter(estimate.is_finite())
-    effect_size_class = pl.col("Effect_Size_Class")
-    class_counts = [
-        (effect_size_class == name).sum().alias(name.capitalize())
-        for name in get_args(EffectSizeClass.__value__)
-    ]
+    return {
+        "Variant": variant,
+        "Scenario": scenario,
+        "Benchmarks": len(benchmark_medians),
+        "Median_Difference_Percent": benchmark_medians.median(),
+        "Median_Difference_Percent_CI_Low": ci.low,
+        "Median_Difference_Percent_CI_High": ci.high,
+        "Increase": increase.sum(),
+        "Decrease": decrease.sum(),
+        "Inconclusive": (~(increase | decrease)).sum(),
+    }
 
-    jdks = sort_jdks(comparison_data.get_column("JDK").unique().to_list(), jdk_versions)
-    jdk_order = {jdk: index for index, jdk in enumerate(jdks)}
-    summary_df = (
-        comparison_data.filter(pl.col("Metric").is_in(EFFECT_SUMMARY_METRICS))
-        .group_by("Variant", "Scenario", "JDK", "Metric")
-        .agg(
-            pl.len().alias("Benchmarks"),
-            increase.sum().alias("Increase"),
-            decrease.sum().alias("Decrease"),
-            (~(increase | decrease)).sum().alias("Inconclusive"),
-            finite_estimate.median().alias("Median_Difference_Percent_Median"),
-            *class_counts,
-        )
-        .sort("Variant", "Scenario", pl.col("JDK").replace_strict(jdk_order), "Metric")
-    )
 
+def generate_energy_summary_table(
+    path: Path,
+    comparison_data: pl.DataFrame,
+) -> pl.DataFrame:
+    """
+    Summarise the energy differences of the benchmarks, per variant and scenario
+
+    Each row gives the median of the benchmark medians and its confidence interval.
+    It also counts the comparisons, one per benchmark and JDK, whose energy increased,
+    decreased or changed inconclusively. Store the result in a CSV at `path` and
+    return it.
+    """
+    energy_df = comparison_data.filter(pl.col("Metric") == Metric.PACKAGE_AND_DRAM)
+
+    rows = []
+    for variant in sorted(energy_df.get_column("Variant").unique()):
+        variant_df = energy_df.filter(pl.col("Variant") == variant)
+        rows += [
+            energy_summary_row(
+                variant,
+                scenario.capitalize(),
+                variant_df.filter(pl.col("Scenario") == scenario),
+            )
+            for scenario in sorted(variant_df.get_column("Scenario").unique())
+        ]
+        rows.append(energy_summary_row(variant, ALL_SCENARIOS_LABEL, variant_df))
+
+    summary_df = pl.DataFrame(rows)
     summary_df.write_csv(path)
-    logger.info("Created effect summary table '%s'", path)
+    logger.info("Created energy summary table '%s'", path)
     return summary_df
