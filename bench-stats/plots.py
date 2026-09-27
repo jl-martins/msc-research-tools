@@ -113,7 +113,7 @@ class MetricMetadata(NamedTuple):
 
 METRIC_METADATA: dict[Metric, MetricMetadata] = {
     Metric.PACKAGE_AND_DRAM: MetricMetadata(name="Energy", symbol="E"),
-    Metric.TIME: MetricMetadata(name="Time", symbol="T"),
+    Metric.TIME: MetricMetadata(name="Time", symbol="t"),
     Metric.POWER: MetricMetadata(name="Power", symbol="P"),
 }
 
