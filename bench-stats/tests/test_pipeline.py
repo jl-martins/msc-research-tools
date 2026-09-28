@@ -143,6 +143,7 @@ def test_every_output_is_written(completed_run: Path):
 
     assert (completed_run / "energy_time_correlation.csv").exists()
     assert (completed_run / "energy_summary.csv").exists()
+    assert (completed_run / "energy_summary_by_jdk.csv").exists()
     for stem in (
         "streams_energy_median_difference_percent_heatmap",
         "streams_time_median_difference_percent_heatmap",
@@ -275,7 +276,14 @@ def test_stale_comparison_is_removed(tree: Path):
     assert correlation.get_column("N").to_list() == [3, 3]
 
 
-@pytest.mark.parametrize("table", ["energy_time_correlation.csv", "energy_summary.csv"])
+@pytest.mark.parametrize(
+    "table",
+    [
+        "energy_time_correlation.csv",
+        "energy_summary.csv",
+        "energy_summary_by_jdk.csv",
+    ],
+)
 def test_stale_overall_table_is_removed(tree: Path, table: str):
     run(tree, n_jobs=1, n_resamples=TEST_RESAMPLES)
     for jdk in JDKS:

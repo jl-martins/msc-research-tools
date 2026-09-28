@@ -12,6 +12,7 @@ import pytest
 from effect_sizes import (
     ConfidenceInterval,
     compare_metric,
+    generate_energy_summary_by_jdk_table,
     generate_energy_summary_table,
     generate_energy_time_correlation_table,
 )
@@ -318,3 +319,61 @@ def test_summary_ends_with_every_scenario(tmp_path: Path):
     summary = generate_energy_summary_table(tmp_path / "summary.csv", comparisons)
     expected = [("Cold", 2, 2), ("Warm", 2, 2), ("All", 2, 4)]
     assert summary.select("Scenario", "Benchmarks", "Increase").rows() == expected
+
+
+def test_summary_by_jdk_keeps_only_benchmarks_of_every_jdk(tmp_path: Path):
+    comparisons = pl.concat([
+        energy_comparisons("temurin-17", [5.0, 7.0, 9.0]),
+        energy_comparisons("temurin-21", [5.0, 7.0]),
+    ])  # fmt: skip
+    summary = generate_energy_summary_by_jdk_table(
+        tmp_path / "summary.csv", comparisons, {}
+    )
+    # Two benchmarks, one row per JDK, in the cold and in the combined scenario
+    assert summary.get_column("Benchmarks").to_list() == [2] * 4
+
+
+def test_summary_by_jdk_leaves_out_benchmarks_without_an_estimate(tmp_path: Path):
+    comparisons = pl.concat([
+        energy_comparisons("temurin-17", [5.0, 7.0, 9.0]),
+        energy_comparisons("temurin-21", [5.0, 7.0, math.nan]),
+    ])  # fmt: skip
+    summary = generate_energy_summary_by_jdk_table(
+        tmp_path / "summary.csv", comparisons, {}
+    )
+    # Two benchmarks, one row per JDK, in the cold and in the combined scenario
+    assert summary.get_column("Benchmarks").to_list() == [2] * 4
+
+
+def test_summary_by_jdk_orders_jdks_by_version(tmp_path: Path):
+    comparisons = pl.concat([
+        energy_comparisons("temurin-11", [5.0]),
+        energy_comparisons("temurin-8", [5.0]),
+    ])  # fmt: skip
+    jdk_versions = {"temurin-8": (8, 0, 0), "temurin-11": (11, 0, 0)}
+    summary = generate_energy_summary_by_jdk_table(
+        tmp_path / "summary.csv", comparisons, jdk_versions
+    )
+    cold = summary.filter(pl.col("Scenario") == "Cold")
+    assert cold.get_column("JDK").to_list() == ["temurin-8", "temurin-11"]
+
+
+def test_summary_by_jdk_ends_with_every_scenario(tmp_path: Path):
+    cold = pl.concat([
+        energy_comparisons("temurin-17", [5.0, 7.0]),
+        energy_comparisons("temurin-21", [5.0, 7.0]),
+    ])  # fmt: skip
+    warm = cold.with_columns(pl.lit("warm").alias("Scenario"))
+    comparisons = pl.concat([warm, cold])
+    summary = generate_energy_summary_by_jdk_table(
+        tmp_path / "summary.csv", comparisons, {}
+    )
+    expected = [
+        ("Cold", "temurin-17", 2),
+        ("Cold", "temurin-21", 2),
+        ("Warm", "temurin-17", 2),
+        ("Warm", "temurin-21", 2),
+        ("All", "temurin-17", 4),
+        ("All", "temurin-21", 4),
+    ]
+    assert summary.select("Scenario", "JDK", "Increase").rows() == expected

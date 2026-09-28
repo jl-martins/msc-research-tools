@@ -23,7 +23,7 @@ from scipy.stats import (
     rankdata,
 )
 
-from measurements import Metric, SampleKey
+from measurements import JdkVersion, Metric, SampleKey, sort_jdks
 from rank_corr import ClusteredCorrelation, total_spearman
 
 logger = logging.getLogger(__name__)
@@ -546,4 +546,57 @@ def generate_energy_summary_table(
     summary_df = pl.DataFrame(rows)
     summary_df.write_csv(path)
     logger.info("Created energy summary table '%s'", path)
+    return summary_df
+
+
+def generate_energy_summary_by_jdk_table(
+    path: Path,
+    comparison_data: pl.DataFrame,
+    jdk_versions: dict[str, JdkVersion],
+) -> pl.DataFrame:
+    """
+    Summarise the energy differences of the benchmarks, per variant, scenario and JDK
+
+    Rows cover only the benchmarks with an estimate on every JDK in every scenario, so
+    differences between JDKs cannot come from differences in the benchmark set. Each
+    row holds the same statistics as the energy summary table. Store the result in a
+    CSV at `path` and return it.
+    """
+    energy_df = comparison_data.filter(pl.col("Metric") == Metric.PACKAGE_AND_DRAM)
+
+    rows = []
+    for variant in sorted(energy_df.get_column("Variant").unique()):
+        variant_df = energy_df.filter(pl.col("Variant") == variant)
+        # Each benchmark has at most one row per scenario and JDK
+        n_scenario_jdk_pairs = variant_df.select("Scenario", "JDK").n_unique()
+        common = (
+            variant_df.filter(pl.col(EffectSize.MEDIAN_DIFFERENCE_PERCENT).is_finite())
+            .group_by("Program")
+            .len()
+            .filter(pl.col("len") == n_scenario_jdk_pairs)
+            .get_column("Program")
+            .to_list()
+        )
+        excluded = sorted(set(variant_df.get_column("Program")) - set(common))
+        logger.debug(
+            "Benchmarks left out of the '%s' summary by JDK: %s", variant, excluded
+        )
+
+        common_df = variant_df.filter(pl.col("Program").is_in(common))
+        jdks = sort_jdks(common_df.get_column("JDK").unique().to_list(), jdk_versions)
+        scenario_groups = [
+            (scenario.capitalize(), common_df.filter(pl.col("Scenario") == scenario))
+            for scenario in sorted(common_df.get_column("Scenario").unique())
+        ]
+        scenario_groups.append((ALL_SCENARIOS_LABEL, common_df))
+        for scenario, scenario_df in scenario_groups:
+            for jdk in jdks:
+                subset = scenario_df.filter(pl.col("JDK") == jdk)
+                # Merged after these keys, so the JDK column follows the scenario
+                keys = {"Variant": variant, "Scenario": scenario, "JDK": jdk}
+                rows.append(keys | energy_summary_row(variant, scenario, subset))
+
+    summary_df = pl.DataFrame(rows)
+    summary_df.write_csv(path)
+    logger.info("Created energy summary by JDK table '%s'", path)
     return summary_df

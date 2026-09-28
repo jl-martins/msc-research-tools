@@ -25,6 +25,10 @@ and produces the following outputs:
      benchmark medians of the change in total energy and its confidence
      interval, per variant and scenario. It also counts the comparisons whose
      median increased, decreased or changed inconclusively.
+   - An `energy_summary_by_jdk.csv` under `<root>`, giving the same statistics
+     per variant, scenario and JDK. It covers only the benchmarks with an
+     estimate on every JDK in every scenario, so that every row covers the
+     same benchmarks.
 
 3. Time and total energy correlation consisting of:
    - A Spearman rank-correlation table under `<root>`, quantifying the
@@ -57,6 +61,7 @@ from effect_sizes import (
     ComparisonRow,
     build_long_time_and_energy_table,
     compare_metric,
+    generate_energy_summary_by_jdk_table,
     generate_energy_summary_table,
     generate_energy_time_correlation_table,
 )
@@ -90,6 +95,7 @@ LOG_FILE_NAME = "bench_stats.log"
 COMPARISON_FILE_NAME = "comparison.csv"
 ENERGY_TIME_CORRELATION_FILE_NAME = "energy_time_correlation.csv"
 ENERGY_SUMMARY_FILE_NAME = "energy_summary.csv"
+ENERGY_SUMMARY_BY_JDK_FILE_NAME = "energy_summary_by_jdk.csv"
 
 
 class ComparisonJobKey(NamedTuple):
@@ -263,9 +269,11 @@ def overall_stats_jobs(
     """Return the jobs that write the overview tables and draw the overview plots"""
     correlation_path = root_dir / ENERGY_TIME_CORRELATION_FILE_NAME
     energy_summary_path = root_dir / ENERGY_SUMMARY_FILE_NAME
+    energy_summary_by_jdk_path = root_dir / ENERGY_SUMMARY_BY_JDK_FILE_NAME
     # Remove any stale tables, so none survives even if these cannot be written
     correlation_path.unlink(missing_ok=True)
     energy_summary_path.unlink(missing_ok=True)
+    energy_summary_by_jdk_path.unlink(missing_ok=True)
 
     jobs: dict[JobKey, Job[object]] = {}
     if not comparisons:
@@ -284,6 +292,15 @@ def overall_stats_jobs(
             generate_energy_summary_table,
             energy_summary_path,
             comparison_data,
+        ),
+    )
+    jobs[energy_summary_by_jdk_path] = (
+        f"energy summary by JDK table '{energy_summary_by_jdk_path}'",
+        functools.partial(
+            generate_energy_summary_by_jdk_table,
+            energy_summary_by_jdk_path,
+            comparison_data,
+            jdk_versions,
         ),
     )
 
