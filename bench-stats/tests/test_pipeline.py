@@ -147,6 +147,7 @@ def test_every_output_is_written(completed_run: Path):
     for stem in (
         "streams_energy_median_difference_percent_heatmap",
         "streams_time_median_difference_percent_heatmap",
+        "streams_time_cliffs_delta_heatmap",
         "streams_power_median_difference_percent_heatmap",
         "streams_energy_time_scatter_plot",
         "streams_energy_median_difference_percent_trend_plot",

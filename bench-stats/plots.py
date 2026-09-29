@@ -263,6 +263,7 @@ HEATMAPS: tuple[tuple[Metric, EffectSize], ...] = (
     (Metric.PACKAGE_AND_DRAM, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
     (Metric.PACKAGE_AND_DRAM, EffectSize.CLIFFS_DELTA),
     (Metric.TIME, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
+    (Metric.TIME, EffectSize.CLIFFS_DELTA),
     (Metric.POWER, EffectSize.MEDIAN_DIFFERENCE_PERCENT),
 )
 
