@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 import plots
 from bench_stats import run
@@ -144,6 +145,7 @@ def test_every_output_is_written(completed_run: Path):
     assert (completed_run / "energy_time_correlation.csv").exists()
     assert (completed_run / "energy_summary.csv").exists()
     assert (completed_run / "energy_summary_by_jdk.csv").exists()
+    assert (scenario_dir / "streams_absolute_energy_time.csv").exists()
     for stem in (
         "streams_energy_median_difference_percent_heatmap",
         "streams_time_median_difference_percent_heatmap",
@@ -153,6 +155,28 @@ def test_every_output_is_written(completed_run: Path):
         "streams_energy_median_difference_percent_trend_plot",
     ):
         assert (scenario_dir / f"{stem}.pgf").exists()
+
+
+def test_absolute_energy_time_table_matches_comparisons(completed_run: Path):
+    scenario_dir = completed_run / SCENARIO
+    table = pl.read_csv(scenario_dir / "streams_absolute_energy_time.csv")
+    # Concatenated in JDK order, and each comparison is sorted by benchmark
+    comparisons = pl.concat(
+        pl.read_csv(scenario_dir / jdk / "streams" / "comparison.csv") for jdk in JDKS
+    )
+
+    def statistics(metric: str, prefix: str) -> pl.DataFrame:
+        return comparisons.filter(pl.col("Metric") == metric).select(
+            pl.col(column).alias(f"{prefix}_{column}")
+            for column in ("Loops_Median", "Loops_IQR", "Variant_Median", "Variant_IQR")
+        )
+
+    expected_keys = [(jdk, benchmark) for jdk in JDKS for benchmark in BENCHMARKS]
+    assert table.select("JDK", "Program").rows() == expected_keys
+    assert_frame_equal(
+        table.select(pl.col("^Energy_.*$")), statistics("PackageAndDRAM", "Energy")
+    )
+    assert_frame_equal(table.select(pl.col("^Time_.*$")), statistics("Time", "Time"))
 
 
 def test_every_plot_fits_the_page(completed_run: Path):
@@ -283,6 +307,7 @@ def test_stale_comparison_is_removed(tree: Path):
         "energy_time_correlation.csv",
         "energy_summary.csv",
         "energy_summary_by_jdk.csv",
+        f"{SCENARIO}/streams_absolute_energy_time.csv",
     ],
 )
 def test_stale_overall_table_is_removed(tree: Path, table: str):

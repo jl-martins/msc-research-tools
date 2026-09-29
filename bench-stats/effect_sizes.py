@@ -600,3 +600,41 @@ def generate_energy_summary_by_jdk_table(
     summary_df.write_csv(path)
     logger.info("Created energy summary by JDK table '%s'", path)
     return summary_df
+
+
+def generate_absolute_energy_time_table(
+    path: Path,
+    comparison_data: pl.DataFrame,
+    jdk_versions: dict[str, JdkVersion],
+) -> pl.DataFrame:
+    """
+    Generate a summary table of absolute energy and execution time metrics
+
+    `comparison_data` holds the comparisons of one scenario and variant. Each row gives
+    the median and IQR of the total energy (J) and time (ms), for the baseline and the
+    variant. Rows are sorted by JDK version, then by benchmark. The result is stored in
+    a CSV at `path` and returned.
+    """
+    keys = ["JDK", "Program"]
+
+    def select_metric(metric: Metric, prefix: str) -> pl.DataFrame:
+        return comparison_data.filter(pl.col("Metric") == metric).select(
+            *keys,
+            *(
+                pl.col(f"{group}_{statistic}").alias(f"{prefix}_{group}_{statistic}")
+                for group in ("Loops", "Variant")
+                for statistic in ("Median", "IQR")
+            ),
+        )
+
+    energy_df = select_metric(Metric.PACKAGE_AND_DRAM, "Energy")
+    time_df = select_metric(Metric.TIME, "Time")
+
+    jdks = energy_df.get_column("JDK").unique().to_list()
+    order = {jdk: i for i, jdk in enumerate(sort_jdks(jdks, jdk_versions))}
+    table_df = energy_df.join(time_df, on=keys, how="inner").sort(
+        pl.col("JDK").replace_strict(order), "Program"
+    )
+    table_df.write_csv(path)
+    logger.info("Created absolute energy and time table '%s'", path)
+    return table_df

@@ -29,6 +29,10 @@ and produces the following outputs:
      per variant, scenario and JDK. It covers only the benchmarks with an
      estimate on every JDK in every scenario, so that every row covers the
      same benchmarks.
+   - A `<scenario>/<variant>_absolute_energy_time.csv` under `<root>`, giving
+     the median and IQR of the energy (J) and time (ms) of the baseline and
+     the variant, for every JDK and benchmark, sorted by JDK version and
+     benchmark.
 
 3. Time and total energy correlation consisting of:
    - A Spearman rank-correlation table under `<root>`, quantifying the
@@ -61,6 +65,7 @@ from effect_sizes import (
     ComparisonRow,
     build_long_time_and_energy_table,
     compare_metric,
+    generate_absolute_energy_time_table,
     generate_energy_summary_by_jdk_table,
     generate_energy_summary_table,
     generate_energy_time_correlation_table,
@@ -96,6 +101,7 @@ COMPARISON_FILE_NAME = "comparison.csv"
 ENERGY_TIME_CORRELATION_FILE_NAME = "energy_time_correlation.csv"
 ENERGY_SUMMARY_FILE_NAME = "energy_summary.csv"
 ENERGY_SUMMARY_BY_JDK_FILE_NAME = "energy_summary_by_jdk.csv"
+ABSOLUTE_ENERGY_TIME_FILE_SUFFIX = "absolute_energy_time.csv"
 
 
 class ComparisonJobKey(NamedTuple):
@@ -274,6 +280,9 @@ def overall_stats_jobs(
     correlation_path.unlink(missing_ok=True)
     energy_summary_path.unlink(missing_ok=True)
     energy_summary_by_jdk_path.unlink(missing_ok=True)
+    for scenario_dir in scenario_dirs:
+        for path in scenario_dir.glob(f"*_{ABSOLUTE_ENERGY_TIME_FILE_SUFFIX}"):
+            path.unlink()
 
     jobs: dict[JobKey, Job[object]] = {}
     if not comparisons:
@@ -303,6 +312,25 @@ def overall_stats_jobs(
             jdk_versions,
         ),
     )
+
+    scenario_variants = comparison_data.select("Scenario", "Variant").unique(
+        maintain_order=True
+    )
+    for scenario, variant in scenario_variants.iter_rows():
+        file_name = f"{variant}_{ABSOLUTE_ENERGY_TIME_FILE_SUFFIX}"
+        absolute_path = root_dir / scenario / file_name
+        variant_data = comparison_data.filter(
+            (pl.col("Scenario") == scenario) & (pl.col("Variant") == variant)
+        )
+        jobs[absolute_path] = (
+            f"absolute energy and time table '{absolute_path}'",
+            functools.partial(
+                generate_absolute_energy_time_table,
+                absolute_path,
+                variant_data,
+                jdk_versions,
+            ),
+        )
 
     # Merged as items, which mypy accepts for keys of any `JobKey` type
     heatmap_jobs = effect_size_heatmap_jobs(root_dir, comparison_data, jdk_versions)
