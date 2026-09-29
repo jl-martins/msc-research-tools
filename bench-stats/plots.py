@@ -1175,7 +1175,7 @@ def render_trend_grid(
     fig.supxlabel("Java version")
     fig.supylabel(
         f"{effect_size_style.label_fmt.format(symbol=metric_metadata.symbol)}\n"
-        f"(shaded: {CI_LEVEL_PERCENT}% CI)",
+        f"[shaded: {CI_LEVEL_PERCENT}% CI]",
         ma="center",
     )
     fig.tight_layout()
