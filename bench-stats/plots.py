@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 from adjustText import adjust_text  # type: ignore[import-untyped]
 from inflection import underscore
 from matplotlib import font_manager
+from matplotlib.collections import PathCollection
 from matplotlib.colors import Normalize, SymLogNorm
 from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.lines import Line2D
@@ -34,6 +35,12 @@ from measurements import JdkVersion, Metric, get_jdk_labels, sort_jdks
 
 logger = logging.getLogger(__name__)
 
+# adjust_text incorrectly blames an old matplotlib when the Axes belong to a
+# SubFigure, which lacks the draw_without_rendering method it looks for
+OLD_MATPLOTLIB_WARNING = "Looks like you are using an old matplotlib version"
+logging.getLogger("adjustText").addFilter(
+    lambda record: not record.getMessage().startswith(OLD_MATPLOTLIB_WARNING)
+)
 
 # Page geometry
 
@@ -266,7 +273,7 @@ HEATMAPS: tuple[tuple[Metric, EffectSize], ...] = (
 SCATTER_PLOT_MARKER_COLOR = FOREST_PLOT_MARKER_COLOR
 
 # Fonts for the per-point benchmark labels and the per-panel correlation annotation
-SCATTER_PLOT_LABEL_FONT: dict[str, Any] = {"size": 6.5}
+SCATTER_PLOT_LABEL_FONT: dict[str, Any] = {"size": 7}
 SCATTER_PLOT_STAT_FONT: dict[str, Any] = {
     "size": 7,
     "bbox": {
@@ -288,8 +295,9 @@ SCATTER_PLOT_AXIS_PADDING_FRACTION = 0.06
 SCATTER_PLOT_LINEAR_THRESHOLD = 1.0
 
 # Width of the linear region, as a multiple of a tenfold step of the logarithmic
-# part. Matplotlib's own default, shared so that the axes and their padding agree.
-SCATTER_PLOT_LINEAR_SCALE = 1.0
+# part. Half of matplotlib's default, which leaves more room for the decades where
+# most points sit. Shared so that the axes and their padding agree.
+SCATTER_PLOT_LINEAR_SCALE = 0.5
 
 # Columns the JDK panels are laid out over. A single row would leave each panel too
 # narrow to hold a labeled point per benchmark, so they wrap over several rows.
@@ -301,9 +309,10 @@ SCATTER_PLOT_COLUMNS = 2
 SCATTER_PLOT_PANEL_HEIGHT_INCHES = 2.7
 SCATTER_PLOT_VERTICAL_MARGIN_INCHES = 1.0
 
-# Space that the layout leaves on either side of every panel and of the legend.
-# Wider than matplotlib's default of about 0.04 so that the legend stands clear of the panels.
-SCATTER_PLOT_HORIZONTAL_PAD_INCHES = 0.06
+# Space that the layout leaves above and below every panel, label and the legend.
+# One and a half times matplotlib's default of 0.042, so that the legend stands clear
+# of the x label and each row's titles stand clear of the tick labels above them.
+SCATTER_PLOT_VERTICAL_PAD_INCHES = 0.063
 
 # Identity line under the points of every panel
 SCATTER_PLOT_IDENTITY_LINE_STYLE: dict[str, Any] = {
@@ -313,8 +322,10 @@ SCATTER_PLOT_IDENTITY_LINE_STYLE: dict[str, Any] = {
     "zorder": 1,
 }
 
-# Rounds `adjust_text` spends spreading the labels of a scatter plot
-SCATTER_PLOT_LABEL_ITERATIONS = 400
+# Rounds `adjust_text` spends spreading the labels of a scatter plot. It rarely
+# converges, so the labels land wherever this limit stops it. The value leaves no
+# labels overlapping in the current results, and has to be rechecked when they change.
+SCATTER_PLOT_LABEL_ITERATIONS = 170
 
 # Leader from a point to wherever `adjust_text` had to move its label
 SCATTER_PLOT_LABEL_ARROW_STYLE: dict[str, Any] = {
@@ -374,15 +385,15 @@ def scatter_by_significance(
     x: npt.NDArray[np.floating],
     y: npt.NDArray[np.floating],
     significant: npt.NDArray[np.bool_],
-) -> None:
-    """Draw points filled where `significant` holds and hollow elsewhere"""
-    ax.scatter(
-        x[significant], y[significant],
-        color=SCATTER_PLOT_MARKER_COLOR, s=15, zorder=2,
-    )  # fmt: skip
-    ax.scatter(
-        x[~significant], y[~significant],
-        facecolors="none", edgecolors=SCATTER_PLOT_MARKER_COLOR, s=15, zorder=2,
+) -> PathCollection:
+    """Draw points filled where `significant` holds and hollow elsewhere, returning their markers"""
+    # A single collection because `adjust_text` avoids each of its markers
+    # but treats each collection in a list as one box around all its points
+    facecolors = np.where(significant, SCATTER_PLOT_MARKER_COLOR, "none")
+
+    return ax.scatter(
+        x, y,
+        facecolors=facecolors, edgecolors=SCATTER_PLOT_MARKER_COLOR, s=15, zorder=2,
     )  # fmt: skip
 
 
@@ -880,8 +891,8 @@ def render_energy_time_scatter_panel(
     panel_df: pl.DataFrame,
     limits: tuple[float, float],
     label_points: bool = True,
-) -> list[plt.Text]:
-    """Draw one panel of an energy-time scatter plot, returning its unplaced point labels"""
+) -> tuple[list[plt.Text], PathCollection]:
+    """Draw one panel of an energy-time scatter plot, returning its unplaced point labels and its markers"""
     # Set before placing the points: adjust_text spreads labels within the
     # Axes' current view, so it must already be the final shared view
     # rather than the tight per-panel default matplotlib would autoscale to
@@ -907,7 +918,7 @@ def render_energy_time_scatter_panel(
     time_excludes_zero = excludes_zero(panel_df, "Time_Diff_Percent")
     energy_excludes_zero = excludes_zero(panel_df, "Energy_Diff_Percent")
     significant = time_excludes_zero & energy_excludes_zero
-    scatter_by_significance(ax, x, y, significant)
+    markers = scatter_by_significance(ax, x, y, significant)
 
     ax.text(
         *SCATTER_PLOT_STAT_POSITION,
@@ -917,12 +928,13 @@ def render_energy_time_scatter_panel(
 
     if label_points:
         benchmarks = panel_df.get_column("Benchmark").to_list()
-        return [
+        texts = [
             ax.text(xi, yi, benchmark, **SCATTER_PLOT_LABEL_FONT)
             for xi, yi, benchmark in zip(x, y, benchmarks, strict=True)
         ]
+        return texts, markers
     else:
-        return []
+        return [], markers
 
 
 def render_energy_time_scatter_grid(
@@ -938,22 +950,28 @@ def render_energy_time_scatter_grid(
         SCATTER_PLOT_PANEL_HEIGHT_INCHES,
         (MAX_FIGURE_HEIGHT_INCHES - SCATTER_PLOT_VERTICAL_MARGIN_INCHES) / rows,
     )
-    fig, axes = plt.subplots(
-        rows, SCATTER_PLOT_COLUMNS,
+    fig = plt.figure(
         figsize=(
             TEXT_WIDTH_INCHES,
             rows * panel_height + SCATTER_PLOT_VERTICAL_MARGIN_INCHES,
         ),
-        sharex=True, sharey=True, squeeze=False,
-        # Constrained layout sizes the panels to make room for the legend beside them
-        layout=ConstrainedLayoutEngine(w_pad=SCATTER_PLOT_HORIZONTAL_PAD_INCHES),
+        # Constrained layout sizes the panels to make room for the legend below them
+        layout=ConstrainedLayoutEngine(h_pad=SCATTER_PLOT_VERTICAL_PAD_INCHES),
+    )  # fmt: skip
+    # The layout gives a figure's legend and its x label the same bottom margin, so
+    # one would hide the other. The panels and their labels sit in a subfigure
+    # instead, which the layout places above the figure's legend.
+    panels = fig.subfigures()
+    axes = panels.subplots(
+        rows, SCATTER_PLOT_COLUMNS, sharex=True, sharey=True, squeeze=False,
     )  # fmt: skip
 
     flat_axes: list[Axes] = list(axes.flat)
-    panel_texts = []
+    panel_labels = []
     for ax, jdk in zip(flat_axes, jdks, strict=False):
         panel_df = scenario_df.filter(pl.col("JDK") == jdk)
-        panel_texts.append((ax, render_energy_time_scatter_panel(ax, panel_df, limits)))
+        texts, markers = render_energy_time_scatter_panel(ax, panel_df, limits)
+        panel_labels.append((ax, texts, markers))
         ax.set_title(jdk)
 
     # The pooled panel has a point per benchmark and JDK, too many to label
@@ -977,8 +995,8 @@ def render_energy_time_scatter_grid(
     label_fmt = EFFECT_SIZE_STYLES[EffectSize.MEDIAN_DIFFERENCE_PERCENT].label_fmt
     time_symbol = get_metric_metadata(Metric.TIME).symbol
     energy_symbol = get_metric_metadata(Metric.PACKAGE_AND_DRAM).symbol
-    fig.supxlabel(label_fmt.format(symbol=time_symbol))
-    fig.supylabel(label_fmt.format(symbol=energy_symbol))
+    panels.supxlabel(label_fmt.format(symbol=time_symbol))
+    panels.supylabel(label_fmt.format(symbol=energy_symbol))
 
     identity_line_label = (
         rf"$\Delta {energy_symbol}_{{\mathrm{{med}}}} = "
@@ -1000,23 +1018,17 @@ def render_energy_time_scatter_grid(
         ),
     ]  # fmt: skip
     # Shorten handles to about the width of a marker
-    fig.legend(handles=handles, loc="outside right center", handlelength=1.2)
+    fig.legend(handles=handles, loc="outside lower center", ncols=3, handlelength=1.2)
 
     fig.canvas.draw()
-    for ax, texts in panel_texts:
+    for ax, texts, markers in panel_labels:
         adjust_text(
             texts,
+            objects=markers,
             ax=ax,
             iter_lim=SCATTER_PLOT_LABEL_ITERATIONS,
             arrowprops=SCATTER_PLOT_LABEL_ARROW_STYLE,
         )
-
-    # A figure label is centered on the figure, but the legend pushes the panels
-    # left. They are measured once the moved point labels are laid out.
-    fig.canvas.draw()
-    left = flat_axes[0].get_position().x0
-    right = flat_axes[SCATTER_PLOT_COLUMNS - 1].get_position().x1
-    fig.supxlabel(label_fmt.format(symbol=time_symbol), x=(left + right) / 2)
 
     return fig
 

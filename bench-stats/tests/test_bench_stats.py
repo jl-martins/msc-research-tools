@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 import pytest
+from matplotlib.colors import to_rgba
 
 from effect_sizes import (
     ConfidenceInterval,
@@ -195,12 +196,15 @@ def test_nan_interval_draws_a_hollow_marker():
     )
 
     fig, ax = plt.subplots()
-    render_energy_time_scatter_panel(ax, panel_df, (-100.0, 100.0), label_points=False)
-    hollow = ax.collections[-1]
+    _, markers = render_energy_time_scatter_panel(
+        ax, panel_df, (-100.0, 100.0), label_points=False,
+    )  # fmt: skip
+    is_hollow = [to_rgba(face) == to_rgba("none") for face in markers.get_facecolors()]
+    hollow = markers.get_offsets()[is_hollow]
     plt.close(fig)
 
     expected = panel_df.select("Time_Diff_Percent", "Energy_Diff_Percent").row(0)
-    assert hollow.get_offsets().tolist() == [list(expected)]
+    assert hollow.tolist() == [list(expected)]
 
 
 JDK_VERSIONS = {
