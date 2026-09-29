@@ -229,11 +229,11 @@ def read_measurements(measurements_path: Path) -> pl.DataFrame:
     invalid_values = df.select(
         pl.col(metric).filter(~is_valid).implode() for metric, is_valid in valid.items()
     ).row(0, named=True)
-    for metric, values in invalid_values.items():
+    for column, values in invalid_values.items():
         if values:
             logger.warning(
                 "Discarding invalid %s values from '%s': %s",
-                metric, measurements_path, values,
+                column, measurements_path, values,
             )  # fmt: skip
 
     df = df.with_columns(

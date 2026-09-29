@@ -278,7 +278,7 @@ def two_sample_bootstrap_ci(
 
         ci = res.confidence_interval
         if np.isfinite([ci.low, ci.high]).all() or fallback_method is None:
-            return ConfidenceInterval(ci.low, ci.high)
+            return ConfidenceInterval(float(ci.low), float(ci.high))
 
         logger.info(
             "%s/%s: degenerate data encountered. Falling back to '%s' bootstrap...",
@@ -294,7 +294,7 @@ def two_sample_bootstrap_ci(
         )
 
     ci = res.confidence_interval
-    return ConfidenceInterval(ci.low, ci.high)
+    return ConfidenceInterval(float(ci.low), float(ci.high))
 
 
 def compare_metric(

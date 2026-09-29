@@ -961,7 +961,7 @@ def render_energy_time_scatter_grid(
     # The layout gives a figure's legend and its x label the same bottom margin, so
     # one would hide the other. The panels and their labels sit in a subfigure
     # instead, which the layout places above the figure's legend.
-    panels = fig.subfigures()
+    panels = fig.add_subfigure(fig.add_gridspec()[0])
     axes = panels.subplots(
         rows, SCATTER_PLOT_COLUMNS, sharex=True, sharey=True, squeeze=False,
     )  # fmt: skip
