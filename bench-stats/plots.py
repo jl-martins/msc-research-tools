@@ -327,6 +327,10 @@ SCATTER_PLOT_IDENTITY_LINE_STYLE: dict[str, Any] = {
 # labels overlapping in the current results, and has to be rechecked when they change.
 SCATTER_PLOT_LABEL_ITERATIONS = 170
 
+# How strongly `adjust_text` pushes labels away from the markers, along x and y.
+# Chosen by trying several values on the current results, so it may need retuning.
+SCATTER_PLOT_LABEL_MARKER_FORCE = (0.3, 0.6)
+
 # Leader from a point to wherever `adjust_text` had to move its label
 SCATTER_PLOT_LABEL_ARROW_STYLE: dict[str, Any] = {
     "arrowstyle": "-",
@@ -1027,6 +1031,7 @@ def render_energy_time_scatter_grid(
             objects=markers,
             ax=ax,
             iter_lim=SCATTER_PLOT_LABEL_ITERATIONS,
+            force_static=SCATTER_PLOT_LABEL_MARKER_FORCE,
             arrowprops=SCATTER_PLOT_LABEL_ARROW_STYLE,
         )
 
