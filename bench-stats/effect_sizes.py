@@ -602,7 +602,7 @@ def generate_energy_summary_by_jdk_table(
     return summary_df
 
 
-def generate_absolute_energy_time_table(
+def generate_energy_time_summary_table(
     path: Path,
     comparison_data: pl.DataFrame,
     jdk_versions: dict[str, JdkVersion],

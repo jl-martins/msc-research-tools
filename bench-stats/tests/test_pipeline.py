@@ -145,7 +145,7 @@ def test_every_output_is_written(completed_run: Path):
     assert (completed_run / "energy_time_correlation.csv").exists()
     assert (completed_run / "energy_summary.csv").exists()
     assert (completed_run / "energy_summary_by_jdk.csv").exists()
-    assert (scenario_dir / "streams_absolute_energy_time.csv").exists()
+    assert (scenario_dir / "streams_energy_time_summary.csv").exists()
     for stem in (
         "streams_energy_median_difference_percent_heatmap",
         "streams_time_median_difference_percent_heatmap",
@@ -157,9 +157,9 @@ def test_every_output_is_written(completed_run: Path):
         assert (scenario_dir / f"{stem}.pgf").exists()
 
 
-def test_absolute_energy_time_table_matches_comparisons(completed_run: Path):
+def test_energy_time_summary_table_matches_comparisons(completed_run: Path):
     scenario_dir = completed_run / SCENARIO
-    table = pl.read_csv(scenario_dir / "streams_absolute_energy_time.csv")
+    table = pl.read_csv(scenario_dir / "streams_energy_time_summary.csv")
     # Concatenated in JDK order, and each comparison is sorted by benchmark
     comparisons = pl.concat(
         pl.read_csv(scenario_dir / jdk / "streams" / "comparison.csv") for jdk in JDKS
@@ -316,7 +316,7 @@ def test_stale_comparison_is_removed(tree: Path):
         "energy_time_correlation.csv",
         "energy_summary.csv",
         "energy_summary_by_jdk.csv",
-        f"{SCENARIO}/streams_absolute_energy_time.csv",
+        f"{SCENARIO}/streams_energy_time_summary.csv",
     ],
 )
 def test_stale_overall_table_is_removed(tree: Path, table: str):
