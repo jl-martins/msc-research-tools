@@ -165,18 +165,27 @@ def test_absolute_energy_time_table_matches_comparisons(completed_run: Path):
         pl.read_csv(scenario_dir / jdk / "streams" / "comparison.csv") for jdk in JDKS
     )
 
-    def statistics(metric: str, prefix: str) -> pl.DataFrame:
+    def statistics(metric: str, prefix: str, label: str) -> pl.DataFrame:
         return comparisons.filter(pl.col("Metric") == metric).select(
-            pl.col(column).alias(f"{prefix}_{column}")
-            for column in ("Loops_Median", "Loops_IQR", "Variant_Median", "Variant_IQR")
+            *(
+                pl.col(column).alias(f"{prefix}_{column}")
+                for column in (
+                    "Loops_Median",
+                    "Loops_IQR",
+                    "Variant_Median",
+                    "Variant_IQR",
+                )
+            ),
+            pl.col("Median_Difference_Percent").alias(label),
         )
 
+    energy = statistics("PackageAndDRAM", "Energy", r"$\Delta E_{\mathrm{med}}(\%)$")
+    time = statistics("Time", "Time", r"$\Delta t_{\mathrm{med}}(\%)$")
     expected_keys = [(jdk, benchmark) for jdk in JDKS for benchmark in BENCHMARKS]
     assert table.select("JDK", "Program").rows() == expected_keys
     assert_frame_equal(
-        table.select(pl.col("^Energy_.*$")), statistics("PackageAndDRAM", "Energy")
+        table.drop("JDK", "Program"), pl.concat([energy, time], how="horizontal")
     )
-    assert_frame_equal(table.select(pl.col("^Time_.*$")), statistics("Time", "Time"))
 
 
 def test_every_plot_fits_the_page(completed_run: Path):

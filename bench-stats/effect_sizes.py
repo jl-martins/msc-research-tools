@@ -606,14 +606,15 @@ def generate_absolute_energy_time_table(
     path: Path,
     comparison_data: pl.DataFrame,
     jdk_versions: dict[str, JdkVersion],
+    median_difference_labels: dict[Metric, str],
 ) -> pl.DataFrame:
     """
     Generate a summary table of absolute energy and execution time metrics
 
     `comparison_data` holds the comparisons of one scenario and variant. Each row gives
     the median and IQR of the total energy (J) and time (ms), for the baseline and the
-    variant. Rows are sorted by JDK version, then by benchmark. The result is stored in
-    a CSV at `path` and returned.
+    variant, and the percent change in each median. Rows are sorted by JDK version, then
+    by benchmark. The result is stored in a CSV at `path` and returned.
     """
     keys = ["JDK", "Program"]
 
@@ -624,6 +625,9 @@ def generate_absolute_energy_time_table(
                 pl.col(f"{group}_{statistic}").alias(f"{prefix}_{group}_{statistic}")
                 for group in ("Loops", "Variant")
                 for statistic in ("Median", "IQR")
+            ),
+            pl.col(EffectSize.MEDIAN_DIFFERENCE_PERCENT).alias(
+                median_difference_labels[metric]
             ),
         )
 

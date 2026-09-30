@@ -31,8 +31,8 @@ and produces the following outputs:
      same benchmarks.
    - A `<scenario>/<variant>_absolute_energy_time.csv` under `<root>`, giving
      the median and IQR of the energy (J) and time (ms) of the baseline and
-     the variant, for every JDK and benchmark, sorted by JDK version and
-     benchmark.
+     the variant, and the percent change in each median, for every JDK and
+     benchmark, sorted by JDK version and benchmark.
 
 3. Time and total energy correlation consisting of:
    - A Spearman rank-correlation table under `<root>`, quantifying the
@@ -63,6 +63,7 @@ import polars as pl
 from effect_sizes import (
     BOOTSTRAP_DEFAULT_N_RESAMPLES,
     ComparisonRow,
+    EffectSize,
     build_long_time_and_energy_table,
     compare_metric,
     generate_absolute_energy_time_table,
@@ -75,6 +76,7 @@ from measurements import (
     BASELINE_DIR_NAME,
     MEASUREMENTS_FILE_NAME,
     METRICS,
+    Metric,
     SampleKey,
     collect_jdk_versions,
     common_benchmarks,
@@ -82,6 +84,7 @@ from measurements import (
     load_and_clean_measurements,
 )
 from plots import (
+    EFFECT_SIZE_STYLES,
     FONT_DIR_ENV_VAR,
     FONT_FILES,
     TREND_PLOTS,
@@ -89,6 +92,7 @@ from plots import (
     effect_size_heatmap_jobs,
     energy_time_scatter_plot_jobs,
     forest_plot_jobs,
+    get_metric_metadata,
     trend_plot_jobs,
 )
 
@@ -313,6 +317,11 @@ def overall_stats_jobs(
         ),
     )
 
+    label_fmt = EFFECT_SIZE_STYLES[EffectSize.MEDIAN_DIFFERENCE_PERCENT].label_fmt
+    median_difference_labels = {
+        metric: label_fmt.format(symbol=get_metric_metadata(metric).symbol)
+        for metric in (Metric.PACKAGE_AND_DRAM, Metric.TIME)
+    }
     scenario_variants = comparison_data.select("Scenario", "Variant").unique(
         maintain_order=True
     )
@@ -329,6 +338,7 @@ def overall_stats_jobs(
                 absolute_path,
                 variant_data,
                 jdk_versions,
+                median_difference_labels,
             ),
         )
 
