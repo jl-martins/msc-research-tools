@@ -1,0 +1,54 @@
+results_dir = "results"
+jar_name = "dacapo.jar"
+jar_version = "23.11-loops"
+java_major = 21
+
+[executables]
+java = "java"
+
+[dacapo]
+mode = "existing"
+dir = "benchmarks"
+
+[profiling]
+jvm_flags = ["-XX:+UnlockDiagnosticVMOptions", "-XX:+DebugNonSafepoints"]
+event = "cpu"
+interval = "1ms"
+iterations = 5
+
+[profiling.max_kernel_settings]
+"kernel.perf_event_paranoid" = 1
+"kernel.kptr_restrict" = 0
+
+[sources]
+excluded_dirs = ["test", "target"]
+kept_dirs = ["target/generated-sources"]
+
+[analysis]
+excluded_class_prefixes = ["java.", "org.dacapo."]
+hot_method_share = 0.9
+hot_loop_share = 0.001
+
+[[streams_markers]]
+kind = "line"
+path = "app/src/main/java/demo/Main.java"
+line = "items.stream().forEach(item -> {"
+
+[[streams_markers]]
+kind = "file"
+path = "app/src/main/java/demo/IntStreamExtensions.java"
+
+[benchmarks.app]
+roots = ["app"]
+
+[[benchmarks.app.jvm_flags]]
+flags = ["-Dapp.security=allow"]
+min_java = 17
+max_java = 23
+
+[[benchmarks.app.jvm_flags]]
+flags = ["-Dapp.java={java_major}"]
+min_java = 18
+
+[benchmarks.other]
+roots = ["other"]

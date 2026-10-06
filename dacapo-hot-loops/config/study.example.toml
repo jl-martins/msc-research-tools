@@ -1,0 +1,170 @@
+results_dir = "/path/to/results/hot-loops"
+jar_name = "dacapo-23.11-MR2-chopin-jlm-loops.jar"
+jar_version = "23.11-MR2-chopin-jlm-loops"
+# Major version of the profiling JDK
+java_major = 21
+
+[executables]
+java = "/path/to/temurin-21/bin/java"
+
+[dacapo]
+mode = "existing"
+dir = "/path/to/msc-dacapobench/benchmarks"
+
+# Used when mode = "worktree", to replicate the build from scratch
+[dacapo.worktree]
+repository = "/path/to/msc-dacapobench"
+branch = "chopin-loops"
+path = "/path/to/msc-dacapobench-loops"
+ant_java_home = "/path/to/temurin-8"
+ant_dist_options = ["-Dbuild.is-official=true"]
+
+[dacapo.worktree.local_properties]
+make = "/usr/bin/make"
+"build.failonerror" = "true"
+"jdk.11.home" = "/path/to/temurin-11"
+
+[profiling]
+jvm_flags = ["-XX:+UnlockDiagnosticVMOptions", "-XX:+DebugNonSafepoints"]
+event = "cpu"
+interval = "1ms"
+iterations = 5
+
+[profiling.max_kernel_settings]
+"kernel.perf_event_paranoid" = 1
+"kernel.kptr_restrict" = 0
+
+[sources]
+excluded_dirs = ["test", "tests", "output", "dist", "resources", "target"]
+kept_dirs = ["target/generated-sources"]
+
+[analysis]
+excluded_class_prefixes = ["java.", "javax.", "jdk.", "sun.", "com.sun.", "org.dacapo."]
+hot_method_share = 0.9
+hot_loop_share = 0.001
+
+# Lines and files that exist only in the streams variant
+[[streams_markers]]
+kind = "line"
+path = "bms/tomcat/build/apache-tomcat-10.1.11-src/java/jakarta/el/ELContext.java"
+line = "listeners.stream().forEach(listener -> {"
+
+[[streams_markers]]
+kind = "line"
+path = "bms/spring/deps/apache-tomcat-9.0.65-src/java/javax/el/ELContext.java"
+line = "listeners.stream().forEach(listener -> {"
+
+[[streams_markers]]
+kind = "line"
+path = "libs/lucene/build/lucene-9.7.0/lucene/analysis/common/src/java/org/apache/lucene/analysis/charfilter/HTMLStripCharFilter.java"
+line = "escapedTags.stream().forEach(tag -> {"
+
+[[streams_markers]]
+kind = "line"
+path = "libs/h2/build/h2database-version-2.2.220/h2/src/main/org/h2/bnf/Bnf.java"
+line = "ruleMap.values().stream().forEach(r -> {"
+
+[[streams_markers]]
+kind = "line"
+path = "bms/pmd/build/pmd-apex/src/main/java/net/sourceforge/pmd/lang/apex/ast/DumpFacade.java"
+line = "extras.stream().forEach(extra -> {"
+
+[[streams_markers]]
+kind = "line"
+path = "bms/cassandra/build/ycsb-0.17.0/accumulo1.6/src/main/java/site/ycsb/db/accumulo/AccumuloClient.java"
+line = "fields.forEach(field -> {"
+
+[[streams_markers]]
+kind = "file"
+path = "bms/jme/build/jme3-core/src/main/java/com/jme3/util/IntStreamExtensions.java"
+
+[[streams_markers]]
+kind = "file"
+path = "bms/kafka/build/kafka-3.3.1-src/clients/src/main/java/org/apache/kafka/common/utils/IntStreamExtensions.java"
+
+[[streams_markers]]
+kind = "file"
+path = "libs/batik/build/batik-1.16/batik-util/src/main/java/org/apache/batik/util/IntStreamExtensions.java"
+
+[[streams_markers]]
+kind = "file"
+path = "libs/h2/build/h2database-version-2.2.220/h2/src/main/org/h2/util/IntStreamExtensions.java"
+
+[[streams_markers]]
+kind = "file"
+path = "bms/spring/deps/h2database-version-2.1.214/h2/src/main/org/h2/util/IntStreamExtensions.java"
+
+[benchmarks.batik]
+roots = ["libs/batik/build"]
+
+[benchmarks.biojava]
+roots = ["bms/biojava/build"]
+# No jar on the classpath contains the demo classes
+excludes = ["*/src/main/java/demo/**"]
+
+[benchmarks.cassandra]
+roots = ["bms/cassandra/build"]
+# The classpath has only the core and cassandra bindings of YCSB
+excludes = ["ycsb-0.17.0/accumulo1.*/**"]
+
+[[benchmarks.cassandra.jvm_flags]]
+flags = ["-Djava.security.manager=allow"]
+min_java = 17
+max_java = 23
+
+[benchmarks.fop]
+roots = ["bms/fop/build"]
+
+[benchmarks.h2]
+roots = ["libs/h2/build", "libs/derby/build"]
+# derbyTesting.jar is built from the generated copy of the toursdb demo
+excludes = ["db-derby-10.15.2.0-src/java/demo/**"]
+
+[benchmarks.h2o]
+roots = ["bms/h2o/build", "libs/commons-logging/build"]
+# The jar uses h2o-jetty-9 and h2o-jetty-9-ext, h2o-k8s-int and the log4j2 logger
+excludes = [
+    "h2o-jetty-8/**",
+    "h2o-jetty-9-minimal/**",
+    "h2o-k8s-comp/**",
+    "h2o-logging/impl-classic/**",
+    "h2o-py/**", # not built
+]
+
+[[benchmarks.h2o.jvm_flags]]
+flags = ["-Dsys.ai.h2o.debug.allowJavaVersions={java_major}"]
+min_java = 18
+
+[benchmarks.jme]
+roots = ["bms/jme/build"]
+# The classpath has jme3-desktop and jme3-lwjgl3
+excludes = ["jme3-android/**", "jme3-ios/**", "jme3-lwjgl/**"]
+
+[benchmarks.jython]
+roots = ["bms/jython/build"]
+
+[benchmarks.kafka]
+roots = ["bms/kafka/build"]
+
+[benchmarks.luindex]
+roots = ["libs/lucene/build"]
+
+[benchmarks.lusearch]
+roots = ["libs/lucene/build"]
+
+[benchmarks.pmd]
+roots = ["bms/pmd/build", "libs/xerces/build"]
+
+[benchmarks.spring]
+roots = [
+    "bms/spring/build",
+    "bms/spring/deps/apache-tomcat-9.0.65-src",
+    "bms/spring/deps/h2database-version-2.1.214",
+    "libs/commons-httpclient/build",
+]
+
+[benchmarks.tomcat]
+roots = ["bms/tomcat/build", "libs/commons-httpclient/build"]
+
+[benchmarks.zxing]
+roots = ["bms/zxing/build"]

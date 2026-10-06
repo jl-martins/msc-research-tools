@@ -1,0 +1,29 @@
+[project]
+name = "dacapo-hot-loops"
+version = "0.1.0"
+description = "Find hot loops in DaCapo benchmark profiles"
+requires-python = ">=3.14"
+dependencies = [
+    "polars~=1.44.2",
+    "pydantic~=2.13.5",
+    "tree-sitter~=0.26.0",
+    "tree-sitter-java~=0.23.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest~=9.1.1",
+    "ruff~=0.16.10",
+]
+
+[project.scripts]
+dacapo-hot-loops = "dacapo_hot_loops.cli:main"
+
+[tool.setuptools]
+packages = ["dacapo_hot_loops"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+package = true

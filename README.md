@@ -7,6 +7,7 @@ The tools and their purposes are summarized below:
 | Tool                  | Language | Purpose                                                                      |
 | --------------------- | -------- | ---------------------------------------------------------------------------- |
 | `bench-stats`         | python   | Aggregate results and computes non-parametric summary statistics.            |
+| `dacapo-hot-loops`    | python   | Find hot loops in DaCapo benchmark profiles.                                 |
 | `dacapo-min-heap`     | python   | Find the minimum heap size required by DaCapo benchmarks in different JDKs.  |
 | `format-comparisons`  | python   | Format effect-size comparisons into Excel workbooks.                         |
 | `jbench-run`          | bash     | Run multiple implementations of a Java benchmark suite across multiple JDKs. |
@@ -18,6 +19,10 @@ The following sections explain how to install, use and uninstall each tool.
 * **jbench-run**
   * OS: Linux
   * Dependencies: [Bash](https://www.gnu.org/savannah-checkouts/gnu/bash/manual/bash.html) (>= 4.3), [GNU Coreutils](https://www.gnu.org/software/coreutils/manual/html_node/index.html), [Java](https://www.oracle.com/java/)
+
+* **dacapo-hot-loops**
+  * OS: Linux
+  * Dependencies: [Java](https://www.oracle.com/java/) (21), [Python](https://www.python.org/) (>= 3.14), [uv](https://docs.astral.sh/uv/), [jfrconv](https://github.com/async-profiler/async-profiler/blob/master/docs/ConverterUsage.md)
 
 * **dacapo-min-heap**
   * OS: Any POSIX-compliant operating system
@@ -76,11 +81,17 @@ cp -R jbench-run/config/. <sysconfdir>/jbench-run/
 
 where `<bindir>` and `<sysconfdir>` are placeholders for the binary and configuration directories, respectively.
 
-#### bench-stats, dacapo-min-heap and format-comparisons
+#### bench-stats, dacapo-hot-loops, dacapo-min-heap and format-comparisons
 
 ```sh
 uv tool install <tool_name>/ 
 rm -rf <tool_name>/build <tool_name>/*.egg-info <tool_name>/__pycache__ # optional (removes Python build artifacts)
+```
+
+`dacapo-hot-loops` also comes with an example configuration file, which can be installed with:
+
+```sh
+cp -R dacapo-hot-loops/config/. <sysconfdir>/dacapo-hot-loops/
 ```
 
 ## Uninstallation
@@ -118,10 +129,11 @@ rm <bindir>/jbench-run
 rm -rf <sysconfdir>/jbench-run/
 ```
 
-#### `bench-stats`, `dacapo-min-heap` and `format-comparisons`
+#### `bench-stats`, `dacapo-hot-loops`, `dacapo-min-heap` and `format-comparisons`
 
 ```sh
 uv tool uninstall <tool_name>
+rm -rf <sysconfdir>/dacapo-hot-loops/ # dacapo-hot-loops only
 ```
 
 ## Usage Examples

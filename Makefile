@@ -11,7 +11,7 @@ binmod := 0755
 sysconfmod := 0644
 
 sh_tools := jbench-run
-uv_tools := bench-stats dacapo-min-heap format-comparisons
+uv_tools := bench-stats dacapo-hot-loops dacapo-min-heap format-comparisons
 tools := $(sh_tools) $(uv_tools)
 
 uninstall_targets := $(addprefix uninstall-,$(tools))
@@ -67,9 +67,13 @@ jbench-run: | $(bindir) $(sysconfdir)
 	@find "$(sysconfdir)/$@/" -type f -exec chmod $(sysconfmod) {} +
 	$(log_done)
 
-$(uv_tools):
+$(uv_tools): | $(sysconfdir)
 	$(log_start) "Installing $@"
 	@$(UV) -q tool install "$@/"
+	@if [ -d "$@/config" ]; then \
+		cp -R "$@/config/." "$(sysconfdir)/$@/"; \
+		find "$(sysconfdir)/$@/" -type f -exec chmod $(sysconfmod) {} +; \
+	fi
 	@rm -rf $@/build $@/*.egg-info $@/__pycache__
 	$(log_done)
 
@@ -90,4 +94,5 @@ $(addprefix uninstall-,$(uv_tools)): uninstall-%:
 	@if $(UV) tool list | grep -q '^$* '; then \
 		$(UV) -q tool uninstall $*; \
 	fi
+	@rm -rf "$(sysconfdir)/$*"
 	$(log_done)
