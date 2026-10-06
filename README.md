@@ -21,8 +21,8 @@ The following sections explain how to install, use and uninstall each tool.
   * Dependencies: [Bash](https://www.gnu.org/savannah-checkouts/gnu/bash/manual/bash.html) (>= 4.3), [GNU Coreutils](https://www.gnu.org/software/coreutils/manual/html_node/index.html), [Java](https://www.oracle.com/java/)
 
 * **dacapo-hot-loops**
-  * OS: Linux
-  * Dependencies: [Java](https://www.oracle.com/java/) (21), [Python](https://www.python.org/) (>= 3.14), [uv](https://docs.astral.sh/uv/), [jfrconv](https://github.com/async-profiler/async-profiler/blob/master/docs/ConverterUsage.md)
+  * OS: Linux for `profile`, any POSIX-compliant operating system otherwise
+  * Dependencies: [Java](https://www.oracle.com/java/) (21), [Python](https://www.python.org/) (>= 3.14), [uv](https://docs.astral.sh/uv/), [jfrconv](https://github.com/async-profiler/async-profiler/blob/master/docs/ConverterUsage.md), [GNU patch](https://savannah.gnu.org/software/patch/) (ahead of any other `patch` on `PATH`)
 
 * **dacapo-min-heap**
   * OS: Any POSIX-compliant operating system
