@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from dacapo_hot_loops import HotLoopsError
+from dacapo_hot_loops.analysis import analyze
 from dacapo_hot_loops.build import prepare, resolve_benchmarks_dir
 from dacapo_hot_loops.config import StudyConfig, load_config
 from dacapo_hot_loops.profiler import import_profiles, profile
@@ -55,6 +56,11 @@ def run_import_profiles(
 ) -> None:
     copied_count = import_profiles(config, args.source_dir, out_dir)
     logger.info(f"Copied {copied_count} profile files to '{out_dir / 'profiles'}'")
+
+
+def run_analyze(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
+    benchmarks_dir = resolve_benchmarks_dir(config.dacapo)
+    analyze(config, args.config, benchmarks_dir, out_dir)
 
 
 def run_not_implemented(
