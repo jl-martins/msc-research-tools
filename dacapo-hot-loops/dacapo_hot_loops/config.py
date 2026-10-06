@@ -35,6 +35,8 @@ class Executables(StrictModel):
     jfrconv: ExpandedStr = "jfrconv"
     ant: ExpandedStr = "ant"
     git: ExpandedStr = "git"
+    mise: ExpandedStr = "mise"
+    uv: ExpandedStr = "uv"
 
 
 class WorktreeConfig(StrictModel):
