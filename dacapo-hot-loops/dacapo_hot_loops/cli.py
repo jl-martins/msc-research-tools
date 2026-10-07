@@ -11,7 +11,9 @@ from dacapo_hot_loops.analysis import analyze
 from dacapo_hot_loops.build import prepare, resolve_benchmarks_dir
 from dacapo_hot_loops.config import StudyConfig, load_config
 from dacapo_hot_loops.profiler import import_profiles, profile
+from dacapo_hot_loops.report import report
 from dacapo_hot_loops.sources import check_sources
+from dacapo_hot_loops.worksheet import write_worksheet
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +65,13 @@ def run_analyze(args: argparse.Namespace, config: StudyConfig, out_dir: Path) ->
     analyze(config, args.config, benchmarks_dir, out_dir)
 
 
-def run_not_implemented(
-    args: argparse.Namespace,
-    config: StudyConfig,
-    out_dir: Path,
-) -> None:
-    raise HotLoopsError(f"'{args.command}' is not implemented yet")
+def run_worksheet(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
+    write_worksheet(out_dir)
+
+
+def run_report(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
+    benchmarks_dir = resolve_benchmarks_dir(config.dacapo)
+    report(config, args.config, benchmarks_dir, out_dir)
 
 
 def non_blank_str(value: str) -> str:
@@ -143,9 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="benchmarks directory that holds the profiles in bms/<bm>/",
     )
-    add_command("analyze", run_not_implemented, "find the hot loops")
-    add_command("worksheet", run_not_implemented, "write the classification worksheet")
-    add_command("report", run_not_implemented, "write the report tables")
+    add_command("analyze", run_analyze, "find the hot loops")
+    add_command("worksheet", run_worksheet, "write the classification worksheet")
+    add_command("report", run_report, "write the report tables")
 
     return parser
 

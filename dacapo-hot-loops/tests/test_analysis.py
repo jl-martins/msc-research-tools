@@ -143,3 +143,11 @@ def test_missing_profile_fails(study):
     Path("out/profiles/luindex/luindex-profile.txt").unlink()
     with pytest.raises(SystemExit):
         analyze_into("out")
+
+
+def test_missing_jar_stops_analysis(study):
+    Path(f"benchmarks/{JAR_NAME}").unlink()
+    with pytest.raises(SystemExit):
+        analyze_into("out")
+
+    assert not Path("out/analysis").exists()

@@ -1,0 +1,40 @@
+# Study whose analysis tables and worksheet are in this directory
+results_dir = "results"
+jar_name = "dacapo.jar"
+jar_version = "23.11-loops"
+java_major = 21
+
+# stream_markers is required, so it must be specified.
+# No markers are needed in this case because only check-sources reads them.
+streams_markers = []
+
+[dacapo]
+mode = "existing"
+dir = "benchmarks"
+
+[profiling]
+jvm_flags = []
+event = "cpu"
+interval = "1ms"
+iterations = 5
+
+[profiling.max_kernel_settings]
+"kernel.perf_event_paranoid" = 1
+
+[sources]
+excluded_dirs = ["test"]
+kept_dirs = []
+
+[analysis]
+excluded_class_prefixes = ["java.", "org.dacapo."]
+hot_method_share = 0.9
+hot_loop_share = 0.001
+
+[benchmarks.luindex]
+roots = ["app", "shared"]
+
+[benchmarks.lusearch]
+roots = ["shared"]
+
+[benchmarks.zxing]
+roots = ["zxing"]

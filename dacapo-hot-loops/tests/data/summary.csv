@@ -1,0 +1,4 @@
+benchmark,total_samples,no_app_samples,no_source_samples,charged_samples,hot_methods,unresolved_hot_methods,unresolved_share,chargeable_loops,hot_loops,outside_loops_share,parse_error_files
+luindex,110,10,0,100,3,0,0.000000,4,3,0.000000,0
+lusearch,60,5,5,50,1,0,0.000000,2,1,0.200000,0
+zxing,20,10,0,10,1,1,1.000000,0,0,1.000000,0

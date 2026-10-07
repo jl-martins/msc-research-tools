@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 dependencies = [
     "polars~=1.44.2",
     "pydantic~=2.13.5",
+    "tabulate~=0.10.0",
     "tree-sitter~=0.26.0",
     "tree-sitter-java~=0.23.5",
 ]

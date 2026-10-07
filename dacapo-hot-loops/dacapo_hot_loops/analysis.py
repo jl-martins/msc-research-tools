@@ -352,17 +352,16 @@ def tool_version() -> str:
 
 def write_provenance(
     config_path: Path,
-    config: StudyConfig,
-    benchmarks_dir: Path,
-    profiles: Mapping[str, Path],
+    jar_version: str | None,
+    inputs: Mapping[str, Path],
     path: Path,
 ) -> None:
-    """Record the tool, the config, the jar and every input the analysis read"""
+    """Record the tool, the config, the jar and the hash of every input file"""
     provenance = {
         "tool_version": tool_version(),
         "config_sha256": file_sha256(config_path),
-        "jar_version": read_jar_version(benchmarks_dir / config.jar_name),
-        "inputs": {bm: file_sha256(profiles[bm]) for bm in sorted(profiles)},
+        "jar_version": jar_version,
+        "inputs": {label: file_sha256(inputs[label]) for label in sorted(inputs)},
     }
     text = json.dumps(provenance, indent=2, sort_keys=True)
     path.write_text(f"{text}\n", encoding="utf-8")
@@ -383,6 +382,8 @@ def analyze(
     if missing:
         raise HotLoopsError(f"Missing collapsed profiles: {', '.join(missing)}")
 
+    # Read first so an unreadable jar fails before any table is written
+    jar_version = read_jar_version(benchmarks_dir / config.jar_name)
     analyses: list[BenchmarkAnalysis] = []
     for bm, profile in profiles.items():
         logger.info("Analysing %s", bm)
@@ -399,8 +400,7 @@ def analyze(
     write_tables(analyses, analysis_dir)
     write_provenance(
         config_path,
-        config,
-        benchmarks_dir,
+        jar_version,
         profiles,
         analysis_dir / PROVENANCE_NAME,
     )

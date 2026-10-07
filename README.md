@@ -236,6 +236,46 @@ bench-stats "$jbench_run_base_out_dir"
 format-comparisons "$jbench_run_base_out_dir"
 ```
 
+The following example finds the hot loops of the DaCapo benchmarks with `dacapo-hot-loops`. Every command reads the study config given by `--config` and writes to its `results_dir`, which `--out` overrides.
+
+```bash
+# 1. Copy the example config next to the results, then open the copy in a text
+#    editor and replace its dummy paths with the paths of this machine.
+results_dir="$HOME/dacapo-hot-loops"
+config="$results_dir/study.toml"
+mkdir -p "$results_dir"
+cp /usr/local/etc/dacapo-hot-loops/study.example.toml "$config"
+"${EDITOR:-vim}" "$config"
+
+# 2. Build DaCapo in a new git worktree (worktree mode only), then check that
+#    the jar and the source trees correspond to the loop-based implementation.
+dacapo-hot-loops prepare --config "$config"
+
+# 3. Check the jar and the source trees again at any time, without building.
+dacapo-hot-loops check-sources --config "$config"
+
+# 4.1. Profile the selected benchmarks (all benchmarks by default).
+dacapo-hot-loops profile --config "$config" --benchmarks "lusearch zxing"
+
+# 4.2. Alternatively, import the profiles that a previous DaCapo build holds in
+#      its `bms/<bm>/` directories.
+dacapo-hot-loops import-profiles --config "$config" --from "$HOME/msc-dacapobench/benchmarks"
+
+# 5. Find the hot methods and the hot loops of every benchmark.
+dacapo-hot-loops analyse --config "$config"
+
+# 6. Write the classification worksheet "$results_dir/classification.csv".
+#    A human should then open it in a spreadsheet or text editor and fill in
+#    `verdict`, `failed_checks` and, optionally, `notes` for every hot loop.
+#    Running the command again after a new analysis keeps the filled-in columns.
+dacapo-hot-loops worksheet --config "$config"
+"${EDITOR:-vim}" "$results_dir/classification.csv"
+
+# 7. Write the shares of convertible hot loops to "$results_dir/report".
+#    The command fails if any hot loop in the worksheet is not classified.
+dacapo-hot-loops report --config "$config"
+```
+
 ## Command-Line Reference
 
 The complete command-line reference of each tool can be read with the `--help` option.
