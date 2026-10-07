@@ -1,5 +1,6 @@
 """Tests of the source index and the source checks"""
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -135,6 +136,14 @@ def test_missing_jar_fails(tmp_path):
 def test_loops_build_passes(study_dir):
     config = load_config(Path("study.toml"))
     assert check_sources(config, Path("benchmarks")) == {"app": 1, "other": 1}
+
+
+def test_indexed_classes_are_logged_per_benchmark(study_dir, caplog):
+    caplog.set_level(logging.INFO)
+    config = load_config(Path("study.toml"))
+    check_sources(config, Path("benchmarks"))
+    indexed = [m for m in caplog.messages if m.startswith("Indexed")]
+    assert indexed == ["Indexed 1 class(es) of app", "Indexed 1 class(es) of other"]
 
 
 def test_indented_stream_line_fails(study_dir):

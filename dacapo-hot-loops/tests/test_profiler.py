@@ -1,5 +1,6 @@
 """Tests of the profile and import-profiles commands"""
 
+import logging
 import re
 from pathlib import Path
 
@@ -145,6 +146,17 @@ def test_import_copies_profiles(study_dir):
     contents = write_profiles(Path("benchmarks"))
     main(IMPORT_ARGS)
     assert read_files(Path("results/profiles")) == contents
+
+
+def test_import_logs_each_benchmark(study_dir, caplog):
+    caplog.set_level(logging.INFO)
+    write_profiles(Path("benchmarks"))
+    main(IMPORT_ARGS)
+    copying = [m for m in caplog.messages if m.startswith("Copying")]
+    assert copying == [
+        "Copying the profiles of app...",
+        "Copying the profiles of other...",
+    ]
 
 
 def test_existing_target_is_refused(study_dir, caplog):

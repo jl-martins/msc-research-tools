@@ -69,7 +69,7 @@ def build_worktree(config: StudyConfig, out_dir: Path) -> None:
     if worktree.path.exists():
         raise HotLoopsError(f"Worktree path '{worktree.path}' already exists")
 
-    logger.info(f"Creating worktree of '{worktree.branch}' at '{worktree.path}'")
+    logger.info(f"Creating worktree of '{worktree.branch}' at '{worktree.path}'...")
     # `git -C` would resolve a relative worktree path against the repository
     git_command = [
         executables.git,
@@ -98,7 +98,7 @@ def build_worktree(config: StudyConfig, out_dir: Path) -> None:
         if any((worktree.path / name).is_file() for name in manifests)
     ]
     for command in pinned_commands:
-        logger.info(f"Running '{shlex.join(command)}' in '{worktree.path}'")
+        logger.info(f"Running '{shlex.join(command)}' in '{worktree.path}'...")
         run_optional_command(command, cwd=worktree.path, capture_output=True)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +113,7 @@ def build_worktree(config: StudyConfig, out_dir: Path) -> None:
         "VIRTUAL_ENV": str(venv_dir),
         "PATH": os.pathsep.join(path_entries),
     }
-    logger.info(f"Building DaCapo in '{benchmarks_dir}', logging to '{build_log}'")
+    logger.info(f"Building DaCapo in '{benchmarks_dir}', logging to '{build_log}'...")
     with build_log.open("w", encoding="utf-8") as log_file:
         run_command(
             ant_command,

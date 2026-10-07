@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
@@ -386,15 +387,26 @@ def analyze(
     jar_version = read_jar_version(benchmarks_dir / config.jar_name)
     analyses: list[BenchmarkAnalysis] = []
     for bm, profile in profiles.items():
-        logger.info("Analysing %s", bm)
+        logger.info("Analyzing %s...", bm)
         try:
             # A frame name that does not decode means the input is not collapsed
             profile_text = profile.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as e:
             raise HotLoopsError(f"Could not read '{profile}': {e}") from e
 
-        analyses.append(analyze_benchmark(bm, config, benchmarks_dir, profile_text))
+        start_time = time.perf_counter()
+        analysis = analyze_benchmark(bm, config, benchmarks_dir, profile_text)
+        end_time = time.perf_counter()
+        analyses.append(analysis)
+        logger.info(
+            "Analyzed %s in %.1f s: %d hot methods, %d hot loops",
+            bm,
+            end_time - start_time,
+            len(analysis.methods),
+            len(analysis.hot),
+        )
 
+    logger.info("Writing the analysis tables...")
     analysis_dir = out_dir / ANALYSIS_DIR_NAME
     analysis_dir.mkdir(parents=True, exist_ok=True)
     write_tables(analyses, analysis_dir)

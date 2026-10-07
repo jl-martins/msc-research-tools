@@ -1,5 +1,6 @@
 """Tests of the prepare command"""
 
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -31,7 +32,11 @@ cp -R "$FAKE_ANT_OUTPUT/." .
 """
 
 PREPARE_ARGS = ["prepare", "--config", "study.toml", "--out", "out"]
-CLASS_COUNTS = "app: 1 indexed classes\nother: 1 indexed classes\n"
+CHECK_MESSAGES = [
+    "Indexed 1 class(es) of app",
+    "Indexed 1 class(es) of other",
+    "All source checks passed, with no ambiguous classes",
+]
 
 
 def git(*args: str) -> str:
@@ -64,16 +69,18 @@ def worktree_study(study_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return study_dir
 
 
-def test_existing_mode_only_checks_sources(study_dir, capsys):
+def test_existing_mode_only_checks_sources(study_dir, caplog):
+    caplog.set_level(logging.INFO)
     main(PREPARE_ARGS)
-    assert capsys.readouterr().out == CLASS_COUNTS
+    assert caplog.messages[-3:] == CHECK_MESSAGES
     assert not Path("out").exists()
 
 
-def test_worktree_mode_builds(worktree_study, capsys):
+def test_worktree_mode_builds(worktree_study, caplog):
+    caplog.set_level(logging.INFO)
     main(PREPARE_ARGS)
     ant_call = Path("worktree/benchmarks/ant-call.txt").read_text()
-    assert capsys.readouterr().out == CLASS_COUNTS
+    assert caplog.messages[-3:] == CHECK_MESSAGES
     assert ant_call == "/opt/temurin-8 -Dbuild.is-official=true dist\n"
     assert Path("out/build.log").read_text() == "BUILD SUCCESSFUL\n"
 

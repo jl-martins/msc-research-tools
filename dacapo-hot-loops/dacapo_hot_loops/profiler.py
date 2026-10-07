@@ -5,6 +5,7 @@ import re
 import shlex
 import shutil
 import tempfile
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -175,9 +176,12 @@ def profile(
 
     failed_benchmarks = []
     for bm in benchmarks:
-        logger.info(f"Profiling {bm}")
+        logger.info(f"Profiling {bm}...")
+        start_time = time.perf_counter()
         try:
             profile_benchmark(config, bm, java_major, jar, profiles_dir / bm)
+            end_time = time.perf_counter()
+            logger.info(f"Profiled {bm} in {end_time - start_time:.1f} s")
         except HotLoopsError as e:
             logger.error(f"Profiling {bm} failed: {e}")
             failed_benchmarks.append(bm)
@@ -189,22 +193,31 @@ def profile(
 def import_profiles(config: StudyConfig, source_dir: Path, out_dir: Path) -> int:
     """Copy every benchmark's profile files and return the number copied"""
     profiles_dir = out_dir / "profiles"
-    copies = [
-        (
-            source_dir / "bms" / bm / f"{bm}-profile{suffix}",
-            profiles_dir / bm / f"{bm}-profile{suffix}",
-        )
+    copies = {
+        bm: [
+            (
+                source_dir / "bms" / bm / f"{bm}-profile{suffix}",
+                profiles_dir / bm / f"{bm}-profile{suffix}",
+            )
+            for suffix in PROFILE_SUFFIXES
+        ]
         for bm in config.benchmarks
-        for suffix in PROFILE_SUFFIXES
-    ]
+    }
 
-    missing_sources = [str(source) for source, _ in copies if not source.is_file()]
+    missing_sources = [
+        str(source)
+        for pairs in copies.values()
+        for source, _ in pairs
+        if not source.is_file()
+    ]
     if missing_sources:
         raise HotLoopsError(f"Missing profile files: {', '.join(missing_sources)}")
 
     require_new_dirs(profiles_dir / bm for bm in config.benchmarks)
-    for source, target in copies:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+    for bm, pairs in copies.items():
+        logger.info("Copying the profiles of %s...", bm)
+        (profiles_dir / bm).mkdir(parents=True, exist_ok=True)
+        for source, target in pairs:
+            shutil.copy2(source, target)
 
-    return len(copies)
+    return sum(len(pairs) for pairs in copies.values())

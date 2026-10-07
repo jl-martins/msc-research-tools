@@ -20,16 +20,10 @@ logger = logging.getLogger(__name__)
 type CommandHandler = Callable[[argparse.Namespace, StudyConfig, Path], None]
 
 
-def print_class_counts(class_counts: dict[str, int]) -> None:
-    for bm, count in class_counts.items():
-        print(f"{bm}: {count} indexed classes")
-
-    logger.info("All source checks passed, with no ambiguous classes")
-
-
 def run_prepare(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
     benchmarks_dir = prepare(config, out_dir)
-    print_class_counts(check_sources(config, benchmarks_dir))
+    check_sources(config, benchmarks_dir)
+    logger.info("All source checks passed, with no ambiguous classes")
 
 
 def run_check_sources(
@@ -38,7 +32,8 @@ def run_check_sources(
     out_dir: Path,
 ) -> None:
     benchmarks_dir = resolve_benchmarks_dir(config.dacapo)
-    print_class_counts(check_sources(config, benchmarks_dir))
+    check_sources(config, benchmarks_dir)
+    logger.info("All source checks passed, with no ambiguous classes")
 
 
 def run_profile(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:

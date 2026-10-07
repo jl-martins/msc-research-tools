@@ -1,6 +1,7 @@
 """Source index module"""
 
 import itertools
+import logging
 import re
 import zipfile
 from collections import defaultdict
@@ -17,6 +18,8 @@ from dacapo_hot_loops.config import (
     StreamsMarker,
     StudyConfig,
 )
+
+logger = logging.getLogger(__name__)
 
 # Fully-qualified top-level class name -> file relative to the benchmarks directory
 type SourceIndex = dict[str, Path]
@@ -212,6 +215,7 @@ def check_sources(config: StudyConfig, benchmarks_dir: Path) -> dict[str, int]:
     """Check the jar and the source trees, and return each benchmark's class count"""
     jar = benchmarks_dir / config.jar_name
     sources, java_major = config.sources, config.java_major
+    logger.info("Checking DaCapo JAR, streams markers and source roots...")
     problems = [
         *jar_problems(jar, config.jar_version),
         *marker_problems(benchmarks_dir, config.streams_markers),
@@ -223,6 +227,7 @@ def check_sources(config: StudyConfig, benchmarks_dir: Path) -> dict[str, int]:
         try:
             index = index_sources(benchmarks_dir, benchmark, sources, java_major)
             class_counts[name] = len(index)
+            logger.info("Indexed %d class(es) of %s", len(index), name)
         except AmbiguousClassesError as e:
             problems.append(f"{name}: {e}")
 

@@ -2,6 +2,7 @@
 
 import filecmp
 import json
+import logging
 import shutil
 from pathlib import Path
 
@@ -55,6 +56,13 @@ def shared_loop_rows(analysis_dir: Path) -> pl.DataFrame:
 def test_summary_holds_one_row_per_benchmark(study):
     summary = read_table(analyze_into("out"), "summary.csv")
     assert summary["benchmark"].to_list() == list(BENCHMARKS)
+
+
+def test_each_benchmark_is_logged_in_order(study, caplog):
+    caplog.set_level(logging.INFO)
+    analyze_into("out")
+    analyzed = [m.split(" in ")[0] for m in caplog.messages if " in " in m]
+    assert analyzed == [f"Analyzed {bm}" for bm in BENCHMARKS]
 
 
 def test_buckets_add_up_to_the_total(study):
