@@ -127,6 +127,11 @@ def test_folded_manifest_line_is_joined(tmp_path):
     assert read_jar_version(jar) == "23.11-MR2-chopin-jlm-loops"
 
 
+def test_missing_jar_fails(tmp_path):
+    with pytest.raises(HotLoopsError, match="Could not read the manifest"):
+        read_jar_version(tmp_path / "dacapo.jar")
+
+
 def test_loops_build_passes(study_dir):
     config = load_config(Path("study.toml"))
     assert check_sources(config, Path("benchmarks")) == {"app": 1, "other": 1}

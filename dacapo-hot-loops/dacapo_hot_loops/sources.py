@@ -150,8 +150,11 @@ def select_multi_release(files: list[Path], java_major: int) -> list[Path]:
 
 
 def read_jar_version(jar: Path) -> str | None:
-    with zipfile.ZipFile(jar) as archive:
-        manifest = archive.read(MANIFEST_PATH).decode("utf-8")
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            manifest = archive.read(MANIFEST_PATH).decode("utf-8")
+    except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError) as e:
+        raise HotLoopsError(f"Could not read the manifest of '{jar}': {e}") from e
 
     # A line that starts with a space continues the previous line
     unfolded_manifest = re.sub(r"\r?\n ", "", manifest)
@@ -166,8 +169,8 @@ def read_jar_version(jar: Path) -> str | None:
 def jar_problems(jar: Path, jar_version: str) -> Iterator[str]:
     try:
         actual_version = read_jar_version(jar)
-    except (OSError, zipfile.BadZipFile, KeyError) as e:
-        yield f"Could not read the manifest of '{jar}': {e}"
+    except HotLoopsError as e:
+        yield str(e)
     else:
         if actual_version != jar_version:
             yield f"Jar version is {actual_version!r}, expected {jar_version!r}"
