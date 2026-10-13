@@ -43,6 +43,11 @@ excluded_class_prefixes = ["java.", "javax.", "jdk.", "sun.", "com.sun.", "org.d
 hot_method_share = 0.9
 hot_loop_share = 0.001
 
+# Restricts `worksheet` and `report` to a stratified random sample of the hot loops
+[sample]
+size = 100
+seed = 42
+
 # Lines and files that exist only in the streams variant
 [[streams_markers]]
 kind = "line"

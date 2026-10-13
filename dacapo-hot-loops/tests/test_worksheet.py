@@ -10,6 +10,7 @@ from conftest import DATA_DIR
 from dacapo_hot_loops import HotLoopsError
 from dacapo_hot_loops.analysis import ANALYSIS_DIR_NAME, LOOP_SCHEMA
 from dacapo_hot_loops.cli import main
+from dacapo_hot_loops.config import SampleConfig
 from dacapo_hot_loops.worksheet import (
     HOT_LOOPS_NAME,
     WORKSHEET_NAME,
@@ -18,6 +19,7 @@ from dacapo_hot_loops.worksheet import (
     Verdict,
     merge_worksheet,
     read_worksheet,
+    write_worksheet,
 )
 
 CONFIG_NAME = "report-study.toml"
@@ -27,6 +29,7 @@ EMPTY = pl.DataFrame(schema=WORKSHEET_SCHEMA)
 CONVERTIBLE_LOOP = "app/Index.java:10-20"
 CALLER_LOOP = "app/Index.java:30-32"
 SHARED_LOOP = "shared/Scan.java:5-9"
+STALE_LOOP = "old/Gone.java:1-3"
 
 
 def loop_row(worksheet: pl.DataFrame, loop_id: str) -> dict[str, object]:
@@ -111,6 +114,19 @@ def test_rerun_keeps_classified_file(results_dir):
     run_worksheet()
     expected = (DATA_DIR / WORKSHEET_NAME).read_bytes()
     assert (results_dir / WORKSHEET_NAME).read_bytes() == expected
+
+
+def test_loops_outside_sample_become_stale(results_dir):
+    shutil.copy(DATA_DIR / WORKSHEET_NAME, results_dir / WORKSHEET_NAME)
+    write_worksheet(results_dir, SampleConfig(size=1, seed=1))
+    worksheet = read_worksheet(results_dir / WORKSHEET_NAME)
+    statuses = dict(zip(worksheet["loop_id"], worksheet["status"], strict=True))
+    assert statuses == {
+        CONVERTIBLE_LOOP: LoopStatus.HOT,
+        CALLER_LOOP: LoopStatus.STALE,
+        STALE_LOOP: LoopStatus.STALE,
+        SHARED_LOOP: LoopStatus.STALE,
+    }
 
 
 def test_reordered_columns_fail(results_dir):

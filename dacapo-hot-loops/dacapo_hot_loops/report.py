@@ -16,6 +16,7 @@ from dacapo_hot_loops.analysis import (
     write_provenance,
 )
 from dacapo_hot_loops.config import StudyConfig
+from dacapo_hot_loops.sample import sample_hot_loops
 from dacapo_hot_loops.sources import read_jar_version
 from dacapo_hot_loops.worksheet import (
     HOT_LOOPS_NAME,
@@ -42,6 +43,7 @@ LEADING_COLUMNS = (
     "time_share",
     "count_share",
     "hot_loops",
+    "sampled_loops",
     "convertible_loops",
 )
 BENCHMARK_RESULT_COLUMNS = (
@@ -56,9 +58,10 @@ VERDICT_VALUES = tuple(verdict.value for verdict in Verdict)
 CHECK_VALUES = tuple(check.value for check in Check)
 
 
-def validate_worksheet(worksheet: pl.DataFrame, hot_loops: pl.DataFrame) -> None:
-    """Validate the classification of every hot loop"""
+def validate_worksheet(worksheet: pl.DataFrame, sampled_loops: pl.DataFrame) -> None:
+    """Validate the classification of every sampled loop"""
     hot_rows = worksheet.filter(pl.col("status") == LoopStatus.HOT)
+    sampled_rows = hot_rows.join(sampled_loops, on="loop_id", how="semi")
     verdict = pl.col("verdict")
     has_checks = pl.col("failed_checks").is_not_null()
     has_valid_verdict = verdict.is_in(VERDICT_VALUES).fill_null(False)
@@ -77,11 +80,11 @@ def validate_worksheet(worksheet: pl.DataFrame, hot_loops: pl.DataFrame) -> None
         "'not' verdict without failed checks": (verdict == Verdict.NOT) & ~has_checks,
     }
     problems = {
-        kind: hot_rows.filter(condition)["loop_id"].to_list()
+        kind: sampled_rows.filter(condition)["loop_id"].to_list()
         for kind, condition in conditions.items()
     }
-    # A hot loop without a hot row means the worksheet predates the analysis
-    missing = hot_loops.join(hot_rows, on="loop_id", how="anti")["loop_id"]
+    # A sampled loop without a hot row means the worksheet predates the analysis or the sample
+    missing = sampled_loops.join(hot_rows, on="loop_id", how="anti")["loop_id"]
     problems["missing hot loop (re-run worksheet)"] = missing.unique().sort().to_list()
 
     lines = [
@@ -93,7 +96,7 @@ def validate_worksheet(worksheet: pl.DataFrame, hot_loops: pl.DataFrame) -> None
 
 
 def compute_benchmark_results(
-    hot_loops: pl.DataFrame,
+    sampled_loops: pl.DataFrame,
     summary: pl.DataFrame,
     worksheet: pl.DataFrame,
 ) -> pl.DataFrame:
@@ -107,9 +110,10 @@ def compute_benchmark_results(
         for check, column in FAILURE_COLUMNS.items()
     ]
     counts = (
-        hot_loops.join(verdicts, on="loop_id", how="left")
+        sampled_loops.join(verdicts, on="loop_id", how="left")
         .group_by("benchmark")
         .agg(
+            pl.len().alias("sampled_loops"),
             is_convertible.sum().alias("convertible_loops"),
             pl.col("samples").filter(is_convertible).sum().alias("convertible_samples"),
             pl.col("samples").sum().alias("hot_samples"),
@@ -117,21 +121,22 @@ def compute_benchmark_results(
         )
     )
     count_columns = [
+        "sampled_loops",
         "convertible_loops",
         "convertible_samples",
         *FAILURE_COLUMNS.values(),
     ]
-    # A share is undefined for a benchmark without hot loops
-    has_hot_loops = pl.col("hot_loops") != 0
+    # A share is undefined for a benchmark without sampled loops
+    has_sampled_loops = pl.col("sampled_loops") != 0
     time_share = pl.col("convertible_samples") / pl.col("hot_samples")
-    count_share = pl.col("convertible_loops") / pl.col("hot_loops")
+    count_share = pl.col("convertible_loops") / pl.col("sampled_loops")
 
     return (
         summary.join(counts, on="benchmark", how="left")
         .with_columns(pl.col(count_columns).fill_null(0).cast(pl.Int64))
         .with_columns(
-            time_share=pl.when(has_hot_loops).then(time_share),
-            count_share=pl.when(has_hot_loops).then(count_share),
+            time_share=pl.when(has_sampled_loops).then(time_share),
+            count_share=pl.when(has_sampled_loops).then(count_share),
         )
         .select(BENCHMARK_RESULT_COLUMNS)
         .sort("benchmark")
@@ -139,10 +144,10 @@ def compute_benchmark_results(
 
 
 def compute_overall_results(benchmark_results: pl.DataFrame) -> pl.DataFrame:
-    """Compute the unweighted mean shares of the benchmarks with hot loops"""
-    with_hot_loops = benchmark_results.filter(pl.col("hot_loops") != 0)
+    """Compute the unweighted mean shares of the benchmarks with sampled loops"""
+    with_sampled_loops = benchmark_results.filter(pl.col("sampled_loops") != 0)
 
-    return with_hot_loops.select(
+    return with_sampled_loops.select(
         pl.col("time_share").mean().alias("mean_time_share"),
         pl.col("count_share").mean().alias("mean_count_share"),
         pl.len().cast(pl.Int64).alias("benchmarks"),
@@ -167,14 +172,15 @@ def report(
 ) -> None:
     """Validate the worksheet, then write the report tables and provenance"""
     hot_loops = read_analysis_table(out_dir, HOT_LOOPS_NAME, LOOP_SCHEMA)
+    sampled_loops = sample_hot_loops(hot_loops, config.sample)
     summary = read_analysis_table(out_dir, SUMMARY_NAME, SUMMARY_SCHEMA)
     worksheet_path = out_dir / WORKSHEET_NAME
     worksheet = read_worksheet(worksheet_path)
-    validate_worksheet(worksheet, hot_loops)
+    validate_worksheet(worksheet, sampled_loops)
     # Read first so an unreadable jar fails before any table is written
     jar_version = read_jar_version(benchmarks_dir / config.jar_name)
 
-    benchmark_results = compute_benchmark_results(hot_loops, summary, worksheet)
+    benchmark_results = compute_benchmark_results(sampled_loops, summary, worksheet)
     overall_results = compute_overall_results(benchmark_results)
     report_dir = out_dir / REPORT_DIR_NAME
     report_dir.mkdir(parents=True, exist_ok=True)

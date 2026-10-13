@@ -9,6 +9,8 @@ import polars as pl
 
 from dacapo_hot_loops import HotLoopsError
 from dacapo_hot_loops.analysis import ANALYSIS_DIR_NAME, LOOP_SCHEMA
+from dacapo_hot_loops.config import SampleConfig
+from dacapo_hot_loops.sample import sample_hot_loops
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +131,7 @@ def merge_worksheet(hot_loops: pl.DataFrame, previous: pl.DataFrame) -> pl.DataF
     ).sort("loop_id")
 
 
-def write_worksheet(out_dir: Path) -> None:
+def write_worksheet(out_dir: Path, sample_config: SampleConfig | None) -> None:
     """Write `classification.csv`, merging it with any previous version"""
     hot_loops = read_analysis_table(out_dir, HOT_LOOPS_NAME, LOOP_SCHEMA)
     path = out_dir / WORKSHEET_NAME
@@ -138,7 +140,8 @@ def write_worksheet(out_dir: Path) -> None:
     else:
         previous = pl.DataFrame(schema=WORKSHEET_SCHEMA)
 
-    worksheet = merge_worksheet(hot_loops, previous)
+    sampled_loops = sample_hot_loops(hot_loops, sample_config)
+    worksheet = merge_worksheet(sampled_loops, previous)
     worksheet.write_csv(path)
 
     is_hot = pl.col("status") == LoopStatus.HOT

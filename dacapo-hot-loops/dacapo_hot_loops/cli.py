@@ -61,7 +61,7 @@ def run_analyze(args: argparse.Namespace, config: StudyConfig, out_dir: Path) ->
 
 
 def run_worksheet(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
-    write_worksheet(out_dir)
+    write_worksheet(out_dir, config.sample)
 
 
 def run_report(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:

@@ -152,6 +152,13 @@ class AnalysisConfig(StrictModel):
     hot_loop_share: float = Field(gt=0, le=1)
 
 
+class SampleConfig(StrictModel):
+    """Sampling configuration for selecting hot loops for classification"""
+
+    size: PositiveInt
+    seed: int
+
+
 class StudyConfig(StrictModel):
     """Every study-specific setting"""
 
@@ -165,6 +172,7 @@ class StudyConfig(StrictModel):
     sources: SourcesConfig
     streams_markers: list[StreamsMarker]
     analysis: AnalysisConfig
+    sample: SampleConfig | None = None
     benchmarks: dict[str, BenchmarkConfig] = Field(min_length=1)
 
 

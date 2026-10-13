@@ -6,7 +6,7 @@ import pytest
 from conftest import DATA_DIR, write_file
 
 from dacapo_hot_loops import HotLoopsError
-from dacapo_hot_loops.config import load_config
+from dacapo_hot_loops.config import SampleConfig, load_config
 
 
 def write_config_variant(tmp_path: Path, old: str, new: str) -> Path:
@@ -19,6 +19,27 @@ def write_config_variant(tmp_path: Path, old: str, new: str) -> Path:
 def test_config_loads():
     config = load_config(DATA_DIR / "study.toml")
     assert list(config.benchmarks) == ["app", "other"]
+
+
+def write_sample_config(tmp_path: Path, size: int) -> Path:
+    """Write the test config with a [sample] table"""
+    text = (DATA_DIR / "study.toml").read_text(encoding="utf-8")
+    sample_table = f"\n[sample]\nsize = {size}\nseed = 42\n"
+    return write_file(tmp_path / "study.toml", text + sample_table)
+
+
+def test_sample_is_optional():
+    assert load_config(DATA_DIR / "study.toml").sample is None
+
+
+def test_sample_loads(tmp_path):
+    sample = load_config(write_sample_config(tmp_path, 100)).sample
+    assert sample == SampleConfig(size=100, seed=42)
+
+
+def test_zero_sample_size_fails(tmp_path):
+    with pytest.raises(HotLoopsError, match="size"):
+        load_config(write_sample_config(tmp_path, 0))
 
 
 def test_missing_key_fails(tmp_path):

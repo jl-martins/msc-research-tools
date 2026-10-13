@@ -11,12 +11,14 @@ from conftest import DATA_DIR, write_jar
 from dacapo_hot_loops import HotLoopsError
 from dacapo_hot_loops.analysis import ANALYSIS_DIR_NAME, LOOP_SCHEMA, SUMMARY_SCHEMA
 from dacapo_hot_loops.cli import main
+from dacapo_hot_loops.config import SampleConfig
 from dacapo_hot_loops.report import (
     SUMMARY_NAME,
     compute_benchmark_results,
     compute_overall_results,
     validate_worksheet,
 )
+from dacapo_hot_loops.sample import sample_hot_loops
 from dacapo_hot_loops.worksheet import (
     HOT_LOOPS_NAME,
     WORKSHEET_NAME,
@@ -34,6 +36,7 @@ CALLER_LOOP = "app/Index.java:30-32"
 SHARED_LOOP = "shared/Scan.java:5-9"
 STALE_LOOP = "old/Gone.java:1-3"
 BENCHMARK_RESULTS = compute_benchmark_results(HOT_LOOPS, SUMMARY, CLASSIFIED)
+SAMPLED_HOT_LOOPS = sample_hot_loops(HOT_LOOPS, SampleConfig(size=1, seed=1))
 
 
 def with_cells(loop_id: str, **values: str | None) -> pl.DataFrame:
@@ -48,9 +51,13 @@ def with_cells(loop_id: str, **values: str | None) -> pl.DataFrame:
     )
 
 
-def assert_invalid(worksheet: pl.DataFrame, problem: str) -> None:
+def assert_invalid(
+    worksheet: pl.DataFrame,
+    problem: str,
+    sampled_loops: pl.DataFrame = HOT_LOOPS,
+) -> None:
     with pytest.raises(HotLoopsError, match=re.escape(problem)):
-        validate_worksheet(worksheet, HOT_LOOPS)
+        validate_worksheet(worksheet, sampled_loops)
 
 
 def benchmark_row(benchmark: str) -> dict[str, object]:
@@ -175,6 +182,50 @@ def test_overall_shares_are_undefined_without_hot_loops():
     without_hot_loops = BENCHMARK_RESULTS.filter(pl.col("hot_loops") == 0)
     overall = compute_overall_results(without_hot_loops).row(0)
     assert overall == (None, None, 0)
+
+
+def test_sampled_loops_equal_hot_loops_without_sample():
+    sampled = BENCHMARK_RESULTS["sampled_loops"]
+    assert sampled.to_list() == BENCHMARK_RESULTS["hot_loops"].to_list()
+
+
+def test_sample_holds_the_convertible_loop():
+    assert SAMPLED_HOT_LOOPS["loop_id"].unique().to_list() == [CONVERTIBLE_LOOP]
+
+
+def test_unclassified_hot_row_outside_sample_passes_validation():
+    worksheet = with_cells(CALLER_LOOP, verdict=None, failed_checks=None)
+    validate_worksheet(worksheet, SAMPLED_HOT_LOOPS)
+
+
+def test_unclassified_sampled_loop_fails():
+    worksheet = with_cells(CONVERTIBLE_LOOP, verdict=None)
+    problem = f"blank or invalid verdict: {CONVERTIBLE_LOOP}"
+    assert_invalid(worksheet, problem, SAMPLED_HOT_LOOPS)
+
+
+def test_sampled_loop_with_stale_row_fails():
+    worksheet = with_cells(CONVERTIBLE_LOOP, status=LoopStatus.STALE.value)
+    problem = f"missing hot loop (re-run worksheet): {CONVERTIBLE_LOOP}"
+    assert_invalid(worksheet, problem, SAMPLED_HOT_LOOPS)
+
+
+def test_count_share_uses_sampled_loops():
+    results = compute_benchmark_results(SAMPLED_HOT_LOOPS, SUMMARY, CLASSIFIED)
+    luindex = results.filter(pl.col("benchmark") == "luindex")
+    counts = luindex.select("hot_loops", "sampled_loops", "count_share")
+    assert counts.row(0, named=True) == {
+        "hot_loops": 3,
+        "sampled_loops": 1,
+        "count_share": 1.0,
+    }
+
+
+def test_benchmark_without_sampled_loops_has_undefined_share():
+    results = compute_benchmark_results(SAMPLED_HOT_LOOPS, SUMMARY, CLASSIFIED)
+    lusearch = results.filter(pl.col("benchmark") == "lusearch")
+    counts = lusearch.select("sampled_loops", "count_share")
+    assert counts.row(0, named=True) == {"sampled_loops": 0, "count_share": None}
 
 
 def test_report_writes_every_file(results_dir):
