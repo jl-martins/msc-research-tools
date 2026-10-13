@@ -18,6 +18,7 @@ from dacapo_hot_loops.analysis import (
 from dacapo_hot_loops.config import StudyConfig
 from dacapo_hot_loops.sample import sample_hot_loops
 from dacapo_hot_loops.sources import read_jar_version
+from dacapo_hot_loops.stats import hypergeom_count_ci
 from dacapo_hot_loops.worksheet import (
     HOT_LOOPS_NAME,
     LIST_SEPARATOR,
@@ -50,6 +51,8 @@ BENCHMARK_RESULT_COLUMNS = (
     *(column for column in SUMMARY_SCHEMA if column not in LEADING_COLUMNS),
     *FAILURE_COLUMNS.values(),
 )
+# Confidence level of the interval around the overall share
+CONFIDENCE_LEVEL = 0.95
 # Cell that stands for an undefined share in Markdown
 UNDEFINED_CELL = "N/A"
 # Plain strings because Polars casts a list of enum members to an Enum type
@@ -138,25 +141,48 @@ def compute_benchmark_results(
 def compute_overall_results(
     sampled_loops: pl.DataFrame,
     worksheet: pl.DataFrame,
+    population_size: int,
 ) -> pl.DataFrame:
-    """Compute the share of convertible loops among the distinct sampled loops"""
-    verdicts = worksheet.select("loop_id", "verdict")
-    convertible_loops = (pl.col("verdict") == Verdict.CONVERTIBLE).sum()
-    sampled_loops_count = pl.len()
-    # A share is undefined without sampled loops
-    count_share = pl.when(sampled_loops_count != 0).then(
-        convertible_loops / sampled_loops_count
-    )
+    """
+    Compute the share of convertible loops and its confidence interval
 
-    # A loop shared by several benchmarks counts once
-    return (
+    The share counts each distinct sampled loop once, even if several benchmarks
+    share it. The interval holds the exact limits for the number of convertible loops
+    among the population's distinct hot loops, divided by the population size.
+    """
+    verdicts = worksheet.select("loop_id", "verdict")
+    counts = (
         sampled_loops.unique("loop_id")
         .join(verdicts, on="loop_id", how="left")
         .select(
-            count_share.alias("count_share"),
-            convertible_loops.cast(pl.Int64).alias("convertible_loops"),
-            sampled_loops_count.cast(pl.Int64).alias("sampled_loops"),
+            (pl.col("verdict") == Verdict.CONVERTIBLE)
+            .sum()
+            .cast(pl.Int64)
+            .alias("convertible_loops"),
+            pl.len().cast(pl.Int64).alias("sampled_loops"),
         )
+    )
+    convertible_count, sample_size = counts.row(0)
+    # The share and its interval are undefined without sampled loops
+    if sample_size != 0:
+        count_share = convertible_count / sample_size
+        interval = hypergeom_count_ci(
+            convertible_count,
+            sample_size,
+            population_size,
+            CONFIDENCE_LEVEL,
+        )
+        low = interval.low / population_size
+        high = interval.high / population_size
+    else:
+        count_share = low = high = None
+
+    return counts.select(
+        pl.lit(count_share, pl.Float64).alias("count_share"),
+        pl.lit(low, pl.Float64).alias("count_share_ci_low"),
+        pl.lit(high, pl.Float64).alias("count_share_ci_high"),
+        "convertible_loops",
+        "sampled_loops",
     )
 
 
@@ -187,7 +213,8 @@ def report(
     jar_version = read_jar_version(benchmarks_dir / config.jar_name)
 
     benchmark_results = compute_benchmark_results(sampled_loops, summary, worksheet)
-    overall_results = compute_overall_results(sampled_loops, worksheet)
+    population_size = hot_loops["loop_id"].n_unique()
+    overall_results = compute_overall_results(sampled_loops, worksheet, population_size)
     report_dir = out_dir / REPORT_DIR_NAME
     report_dir.mkdir(parents=True, exist_ok=True)
     benchmark_results.write_csv(

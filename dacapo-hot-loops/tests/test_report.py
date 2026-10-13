@@ -13,12 +13,14 @@ from dacapo_hot_loops.analysis import ANALYSIS_DIR_NAME, LOOP_SCHEMA, SUMMARY_SC
 from dacapo_hot_loops.cli import main
 from dacapo_hot_loops.config import SampleConfig
 from dacapo_hot_loops.report import (
+    CONFIDENCE_LEVEL,
     SUMMARY_NAME,
     compute_benchmark_results,
     compute_overall_results,
     validate_worksheet,
 )
 from dacapo_hot_loops.sample import sample_hot_loops
+from dacapo_hot_loops.stats import hypergeom_count_ci
 from dacapo_hot_loops.worksheet import (
     HOT_LOOPS_NAME,
     WORKSHEET_NAME,
@@ -36,6 +38,7 @@ CALLER_LOOP = "app/Index.java:30-32"
 SHARED_LOOP = "shared/Scan.java:5-9"
 STALE_LOOP = "old/Gone.java:1-3"
 BENCHMARK_RESULTS = compute_benchmark_results(HOT_LOOPS, SUMMARY, CLASSIFIED)
+POPULATION_SIZE = HOT_LOOPS["loop_id"].n_unique()
 SAMPLED_HOT_LOOPS = sample_hot_loops(HOT_LOOPS, SampleConfig(size=1, seed=1))
 
 
@@ -175,7 +178,7 @@ def test_sampled_loops_equal_hot_loops_without_sample():
 
 
 def test_overall_share_counts_shared_loop_once():
-    overall = compute_overall_results(HOT_LOOPS, CLASSIFIED)
+    overall = compute_overall_results(HOT_LOOPS, CLASSIFIED, POPULATION_SIZE)
     counts = overall.select("count_share", "convertible_loops", "sampled_loops")
     assert counts.row(0, named=True) == {
         "count_share": pytest.approx(1 / 3),
@@ -184,9 +187,26 @@ def test_overall_share_counts_shared_loop_once():
     }
 
 
+def test_census_interval_is_the_share():
+    overall = compute_overall_results(HOT_LOOPS, CLASSIFIED, POPULATION_SIZE)
+    interval = overall.select("count_share_ci_low", "count_share_ci_high").row(0)
+    assert interval == (pytest.approx(1 / 3), pytest.approx(1 / 3))
+
+
+def test_overall_interval_divides_the_count_limits_by_the_population():
+    population_size = 521
+    sampled = pl.DataFrame({"loop_id": [f"l{i}" for i in range(90)]})
+    verdicts = ["convertible"] * 30 + ["not"] * 60
+    worksheet = sampled.with_columns(verdict=pl.Series(verdicts))
+    overall = compute_overall_results(sampled, worksheet, population_size)
+    interval = overall.select("count_share_ci_low", "count_share_ci_high").row(0)
+    low, high = hypergeom_count_ci(30, 90, population_size, CONFIDENCE_LEVEL)
+    assert interval == (low / population_size, high / population_size)
+
+
 def test_overall_share_ignores_hot_rows_outside_the_sample():
     sampled = HOT_LOOPS.filter(pl.col("loop_id") == CONVERTIBLE_LOOP)
-    overall = compute_overall_results(sampled, CLASSIFIED)
+    overall = compute_overall_results(sampled, CLASSIFIED, POPULATION_SIZE)
     counts = overall.select("count_share", "convertible_loops", "sampled_loops")
     assert counts.row(0, named=True) == {
         "count_share": 1.0,
@@ -196,9 +216,11 @@ def test_overall_share_ignores_hot_rows_outside_the_sample():
 
 
 def test_overall_share_is_undefined_without_sampled_loops():
-    overall = compute_overall_results(HOT_LOOPS.clear(), CLASSIFIED)
+    overall = compute_overall_results(HOT_LOOPS.clear(), CLASSIFIED, POPULATION_SIZE)
     assert overall.row(0, named=True) == {
         "count_share": None,
+        "count_share_ci_low": None,
+        "count_share_ci_high": None,
         "convertible_loops": 0,
         "sampled_loops": 0,
     }
