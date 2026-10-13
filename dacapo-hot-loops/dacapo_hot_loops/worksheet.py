@@ -17,7 +17,14 @@ WORKSHEET_NAME = "classification.csv"
 # Separator for the `benchmarks` and `failed_checks` lists
 LIST_SEPARATOR = ";"
 # Columns that identify a loop, refreshed from `hot_loops.csv` on every run
-LOOP_COLUMNS = ("loop_id", "file", "start_line", "end_line", "enclosing_method_key")
+LOOP_COLUMNS = (
+    "loop_id",
+    "file",
+    "start_line",
+    "end_line",
+    "loop_type",
+    "enclosing_method_key",
+)
 # Columns that only the researcher writes, kept unchanged on every run
 CLASSIFICATION_COLUMNS = ("verdict", "failed_checks", "notes")
 
@@ -51,6 +58,7 @@ WORKSHEET_SCHEMA: Mapping[str, pl.DataType] = {
     "file": pl.String(),
     "start_line": pl.Int64(),
     "end_line": pl.Int64(),
+    "loop_type": pl.String(),
     "enclosing_method_key": pl.String(),
     "benchmarks": pl.String(),
     "status": pl.String(),

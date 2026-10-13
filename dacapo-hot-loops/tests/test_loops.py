@@ -7,7 +7,7 @@ import pytest
 from conftest import DATA_DIR
 
 from dacapo_hot_loops.collapsed import parse_collapsed
-from dacapo_hot_loops.javasrc import JavaSources, LineRange
+from dacapo_hot_loops.javasrc import JavaSources, LineRange, LoopType
 from dacapo_hot_loops.loops import (
     LoopOrigin,
     caller_loops,
@@ -56,6 +56,16 @@ def loops_of(text, sources):
 def test_method_loops_include_nested_and_lambda_loops(sources):
     _, loops = loops_of("p/Outer.work:16_[j] 10\n", sources)
     assert tuple(loop.line_range for loop in loops) == WORK_LOOPS
+
+
+def test_method_loops_have_their_statement_types(sources):
+    _, loops = loops_of("p/Outer.work:16_[j] 10\n", sources)
+    assert [loop.type for loop in loops] == [
+        LoopType.BASIC_FOR,
+        LoopType.WHILE,
+        LoopType.DO_WHILE,
+        LoopType.ENHANCED_FOR,
+    ]
 
 
 def test_unresolved_method_contributes_no_loops(sources):

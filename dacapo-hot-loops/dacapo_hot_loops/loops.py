@@ -6,7 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
 
-from dacapo_hot_loops.javasrc import JavaSources, LineRange
+from dacapo_hot_loops.javasrc import JavaSources, LineRange, LoopType
 from dacapo_hot_loops.methods import (
     BenchmarkCharges,
     CallerCharge,
@@ -31,6 +31,7 @@ class ChargeableLoop(NamedTuple):
     loop_id: str
     file: Path
     line_range: LineRange
+    type: LoopType
     enclosing_method_key: str
     origin: LoopOrigin
 
@@ -69,14 +70,15 @@ def method_loops(
     # enclosing method so that they can be located in the source code.
     return [
         ChargeableLoop(
-            loop_id=loop_id_of(charge.file, loop),
+            loop_id=loop_id_of(charge.file, loop.line_range),
             file=charge.file,
-            line_range=loop,
+            line_range=loop.line_range,
+            type=loop.type,
             enclosing_method_key=charge.method_key,
             origin=LoopOrigin.HOT_METHOD,
         )
         for loop in java_file.loops
-        if (innermost := java_file.innermost_declaration(loop)) is not None
+        if (innermost := java_file.innermost_declaration(loop.line_range)) is not None
         and innermost.line_range in ranges
     ]
 
@@ -90,14 +92,15 @@ def caller_loops(caller: CallerCharge, sources: JavaSources) -> list[ChargeableL
 
     return [
         ChargeableLoop(
-            loop_id=loop_id_of(caller.file, loop),
+            loop_id=loop_id_of(caller.file, loop.line_range),
             file=caller.file,
-            line_range=loop,
+            line_range=loop.line_range,
+            type=loop.type,
             enclosing_method_key=caller.method_key,
             origin=LoopOrigin.CALLER,
         )
         for loop in java_file.loops
-        if loop.contains_line(caller.line)
+        if loop.line_range.contains_line(caller.line)
     ]
 
 

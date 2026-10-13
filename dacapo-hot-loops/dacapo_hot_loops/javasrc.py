@@ -1,7 +1,8 @@
 """Java source module"""
 
 import functools
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, Self
 
@@ -23,15 +24,30 @@ NAMED_TYPE_NODES = frozenset(
 CONSTRUCTOR_NODES = frozenset(
     {"constructor_declaration", "compact_constructor_declaration"}
 )
-LOOP_NODES = frozenset(
-    {"for_statement", "enhanced_for_statement", "while_statement", "do_statement"}
-)
 # A class body of one of these is anonymous, so its binary name holds a number
 ANONYMOUS_BODY_PARENTS = frozenset({"object_creation_expression", "enum_constant"})
 # Inside one of these, a type declaration is local rather than a member
 CODE_BODY_NODES = frozenset({"block", "constructor_body", "switch_block"})
 CONSTRUCTOR_NAME = "<init>"
 CLASS_INITIALISER_NAME = "<clinit>"
+
+
+class LoopType(StrEnum):
+    """Type of a loop statement"""
+
+    BASIC_FOR = "basic_for"
+    ENHANCED_FOR = "enhanced_for"
+    WHILE = "while"
+    DO_WHILE = "do_while"
+
+
+# Loop type of each tree-sitter loop node
+LOOP_TYPES: Mapping[str, LoopType] = {
+    "for_statement": LoopType.BASIC_FOR,
+    "enhanced_for_statement": LoopType.ENHANCED_FOR,
+    "while_statement": LoopType.WHILE,
+    "do_statement": LoopType.DO_WHILE,
+}
 
 
 class LineRange(NamedTuple):
@@ -45,6 +61,13 @@ class LineRange(NamedTuple):
 
     def contains(self, other: Self) -> bool:
         return self.start <= other.start and other.end <= self.end
+
+
+class Loop(NamedTuple):
+    """Loop construct"""
+
+    line_range: LineRange
+    type: LoopType
 
 
 class PendingNode(NamedTuple):
@@ -68,7 +91,7 @@ class JavaFile(NamedTuple):
     """Declarations, loops and syntax errors of one parsed source file"""
 
     declarations: tuple[Declaration, ...]
-    loops: tuple[LineRange, ...]
+    loops: tuple[Loop, ...]
     error_lines: tuple[int, ...]
 
     def declarations_of(
@@ -159,7 +182,7 @@ def parse_java(source: str) -> JavaFile:
     """Find every declaration, loop and syntax error of a source file"""
     tree = java_parser().parse(source.encode("utf-8"))
     declarations: list[Declaration] = []
-    loops: list[LineRange] = []
+    loops: list[Loop] = []
     error_lines: set[int] = set()
 
     # An explicit stack keeps a deeply nested file within the recursion limit
@@ -169,8 +192,9 @@ def parse_java(source: str) -> JavaFile:
         if node.type == "ERROR" or node.is_missing:
             error_lines.add(node.start_point[0] + 1)
 
-        if node.type in LOOP_NODES:
-            loops.append(node_range(node))
+        loop_type = LOOP_TYPES.get(node.type)
+        if loop_type is not None:
+            loops.append(Loop(node_range(node), loop_type))
 
         name = declaration_name(node)
         if name is not None:

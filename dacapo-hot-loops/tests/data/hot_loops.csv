@@ -1,5 +1,5 @@
-benchmark,loop_id,file,start_line,end_line,enclosing_method_key,origin,samples,share
-luindex,app/Index.java:10-20,app/Index.java,10,20,app.Index.add,hot-method,60,0.600000
-luindex,shared/Scan.java:5-9,shared/Scan.java,5,9,shared.Scan.next,hot-method,30,0.300000
-luindex,app/Index.java:30-32,app/Index.java,30,32,app.Index.flush,caller,10,0.100000
-lusearch,shared/Scan.java:5-9,shared/Scan.java,5,9,shared.Scan.next,hot-method,40,0.800000
+benchmark,loop_id,file,start_line,end_line,loop_type,enclosing_method_key,origin,samples,share
+luindex,app/Index.java:10-20,app/Index.java,10,20,basic_for,app.Index.add,hot-method,60,0.600000
+luindex,shared/Scan.java:5-9,shared/Scan.java,5,9,enhanced_for,shared.Scan.next,hot-method,30,0.300000
+luindex,app/Index.java:30-32,app/Index.java,30,32,while,app.Index.flush,caller,10,0.100000
+lusearch,shared/Scan.java:5-9,shared/Scan.java,5,9,enhanced_for,shared.Scan.next,hot-method,40,0.800000

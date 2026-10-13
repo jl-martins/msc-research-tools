@@ -3,7 +3,7 @@
 import pytest
 from conftest import DATA_DIR
 
-from dacapo_hot_loops.javasrc import JavaFile, LineRange, parse_java
+from dacapo_hot_loops.javasrc import JavaFile, LineRange, LoopType, parse_java
 
 # Every range below was counted by hand from its fixture
 
@@ -52,8 +52,8 @@ def test_missing_method_is_unresolved(outer):
     assert outer.declarations_of("Outer", "absent", ()) == []
 
 
-def test_every_loop_kind_is_found(outer):
-    assert outer.loops == (
+def test_every_loop_type_is_found(outer):
+    assert [loop.line_range for loop in outer.loops] == [
         LineRange(11, 11),  # braceless `for` in the constructor
         LineRange(15, 19),  # `for` with a block body
         LineRange(16, 18),  # `while` nested in the `for` above
@@ -61,7 +61,19 @@ def test_every_loop_kind_is_found(outer):
         LineRange(24, 26),  # `for` inside a lambda
         LineRange(30, 32),  # `for` inside an anonymous class
         LineRange(43, 45),  # `while` in the nested type
-    )
+    ]
+
+
+def test_every_loop_has_its_statement_type(outer):
+    assert [loop.type for loop in outer.loops] == [
+        LoopType.BASIC_FOR,
+        LoopType.BASIC_FOR,
+        LoopType.WHILE,
+        LoopType.DO_WHILE,
+        LoopType.ENHANCED_FOR,
+        LoopType.BASIC_FOR,
+        LoopType.WHILE,
+    ]
 
 
 def test_nested_loop_lies_inside_its_outer_loop():
@@ -109,7 +121,7 @@ def test_syntax_error_lines_are_listed(broken):
 
 
 def test_broken_file_keeps_parsed_loops(broken):
-    assert LineRange(5, 7) in broken.loops
+    assert LineRange(5, 7) in [loop.line_range for loop in broken.loops]
 
 
 def test_broken_file_keeps_parsed_declarations(broken):
