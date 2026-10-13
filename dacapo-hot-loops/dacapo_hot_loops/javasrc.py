@@ -61,7 +61,7 @@ class Declaration(NamedTuple):
     # None when the binary class name holds an anonymous or local segment
     type_path: str | None
     name: str
-    range: LineRange
+    line_range: LineRange
 
 
 class JavaFile(NamedTuple):
@@ -81,23 +81,26 @@ class JavaFile(NamedTuple):
         if has_anonymous_segment(type_path):
             # javac numbers anonymous and local classes, so the name must do
             return [
-                declaration.range
+                declaration.line_range
                 for declaration in self.declarations
                 if declaration.name == name
-                and any(map(declaration.range.contains_line, sampled_lines))
+                and any(map(declaration.line_range.contains_line, sampled_lines))
             ]
         else:
             return [
-                declaration.range
+                declaration.line_range
                 for declaration in self.declarations
                 if declaration.type_path == type_path and declaration.name == name
             ]
 
     def innermost_declaration(self, lines: LineRange) -> Declaration | None:
         """The innermost declaration whose range contains a range"""
-        containing = [d for d in self.declarations if d.range.contains(lines)]
+        containing = [d for d in self.declarations if d.line_range.contains(lines)]
         if containing:
-            return min(containing, key=lambda d: (-d.range.start, d.range.end))
+            return min(
+                containing,
+                key=lambda d: (-d.line_range.start, d.line_range.end),
+            )
         else:
             return None
 
@@ -193,7 +196,7 @@ def parse_java(source: str) -> JavaFile:
             else:
                 pending.append(PendingNode(child, child_path, child_in_code))
 
-    declarations.sort(key=lambda d: (d.range, d.name, d.type_path or ""))
+    declarations.sort(key=lambda d: (d.line_range, d.name, d.type_path or ""))
     loops.sort()
 
     return JavaFile(tuple(declarations), tuple(loops), tuple(sorted(error_lines)))

@@ -55,7 +55,7 @@ def loops_of(text, sources):
 
 def test_method_loops_include_nested_and_lambda_loops(sources):
     _, loops = loops_of("p/Outer.work:16_[j] 10\n", sources)
-    assert tuple(loop.range for loop in loops) == WORK_LOOPS
+    assert tuple(loop.line_range for loop in loops) == WORK_LOOPS
 
 
 def test_unresolved_method_contributes_no_loops(sources):
@@ -117,7 +117,7 @@ def test_caller_loop_holding_the_call_site_is_chargeable(sources):
     text = "p/Outer.work:17_[j];p/Outer$Inner.spin:44_[j] 10\n"
     _, loops = loops_of(text, sources)
     caller_origin = [loop for loop in loops if loop.origin == LoopOrigin.CALLER]
-    assert [loop.range for loop in caller_origin] == [OUTER_FOR, INNER_WHILE]
+    assert [loop.line_range for loop in caller_origin] == [OUTER_FOR, INNER_WHILE]
 
 
 def test_method_origin_wins_a_shared_loop(sources):

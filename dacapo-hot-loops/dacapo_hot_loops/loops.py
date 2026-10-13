@@ -30,7 +30,7 @@ class ChargeableLoop(NamedTuple):
 
     loop_id: str
     file: Path
-    range: LineRange
+    line_range: LineRange
     enclosing_method_key: str
     origin: LoopOrigin
 
@@ -71,13 +71,13 @@ def method_loops(
         ChargeableLoop(
             loop_id=loop_id_of(charge.file, loop),
             file=charge.file,
-            range=loop,
+            line_range=loop,
             enclosing_method_key=charge.method_key,
             origin=LoopOrigin.HOT_METHOD,
         )
         for loop in java_file.loops
         if (innermost := java_file.innermost_declaration(loop)) is not None
-        and innermost.range in ranges
+        and innermost.line_range in ranges
     ]
 
 
@@ -92,7 +92,7 @@ def caller_loops(caller: CallerCharge, sources: JavaSources) -> list[ChargeableL
         ChargeableLoop(
             loop_id=loop_id_of(caller.file, loop),
             file=caller.file,
-            range=loop,
+            line_range=loop,
             enclosing_method_key=caller.method_key,
             origin=LoopOrigin.CALLER,
         )
@@ -134,11 +134,12 @@ def innermost_loop(
             holding = [
                 loop
                 for loop in loops_by_file.get(frame.file, ())
-                if loop.range.contains_line(frame.line)
+                if loop.line_range.contains_line(frame.line)
             ]
             if holding:
                 return max(
-                    holding, key=lambda loop: (loop.range.start, -loop.range.end)
+                    holding,
+                    key=lambda loop: (loop.line_range.start, -loop.line_range.end),
                 )
 
     return None
