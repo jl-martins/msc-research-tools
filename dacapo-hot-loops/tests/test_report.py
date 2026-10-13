@@ -133,10 +133,6 @@ def test_missing_hot_loop_fails():
     assert_invalid(worksheet, f"missing hot loop (re-run worksheet): {SHARED_LOOP}")
 
 
-def test_time_shares():
-    assert BENCHMARK_RESULTS["time_share"].to_list() == [0.6, 0.0, None]
-
-
 def test_count_shares():
     count_shares = BENCHMARK_RESULTS["count_share"].to_list()
     assert count_shares == [pytest.approx(1 / 3), 0.0, None]
@@ -144,7 +140,7 @@ def test_count_shares():
 
 def test_shares_are_undefined_without_hot_loops():
     zxing = benchmark_row("zxing")
-    assert (zxing["time_share"], zxing["count_share"]) == (None, None)
+    assert zxing["count_share"] is None
 
 
 def test_loop_counts_toward_every_failed_check():
@@ -173,20 +169,39 @@ def test_summary_columns_are_kept():
     assert benchmark_row("lusearch")["outside_loops_share"] == 0.2
 
 
-def test_overall_means_skip_benchmarks_without_hot_loops():
-    overall = compute_overall_results(BENCHMARK_RESULTS).row(0)
-    assert overall == (pytest.approx(0.3), pytest.approx(1 / 6), 2)
-
-
-def test_overall_shares_are_undefined_without_hot_loops():
-    without_hot_loops = BENCHMARK_RESULTS.filter(pl.col("hot_loops") == 0)
-    overall = compute_overall_results(without_hot_loops).row(0)
-    assert overall == (None, None, 0)
-
-
 def test_sampled_loops_equal_hot_loops_without_sample():
     sampled = BENCHMARK_RESULTS["sampled_loops"]
     assert sampled.to_list() == BENCHMARK_RESULTS["hot_loops"].to_list()
+
+
+def test_overall_share_counts_shared_loop_once():
+    overall = compute_overall_results(HOT_LOOPS, CLASSIFIED)
+    counts = overall.select("count_share", "convertible_loops", "sampled_loops")
+    assert counts.row(0, named=True) == {
+        "count_share": pytest.approx(1 / 3),
+        "convertible_loops": 1,
+        "sampled_loops": 3,
+    }
+
+
+def test_overall_share_ignores_hot_rows_outside_the_sample():
+    sampled = HOT_LOOPS.filter(pl.col("loop_id") == CONVERTIBLE_LOOP)
+    overall = compute_overall_results(sampled, CLASSIFIED)
+    counts = overall.select("count_share", "convertible_loops", "sampled_loops")
+    assert counts.row(0, named=True) == {
+        "count_share": 1.0,
+        "convertible_loops": 1,
+        "sampled_loops": 1,
+    }
+
+
+def test_overall_share_is_undefined_without_sampled_loops():
+    overall = compute_overall_results(HOT_LOOPS.clear(), CLASSIFIED)
+    assert overall.row(0, named=True) == {
+        "count_share": None,
+        "convertible_loops": 0,
+        "sampled_loops": 0,
+    }
 
 
 def test_sample_holds_the_convertible_loop():
@@ -238,14 +253,14 @@ def test_report_writes_every_file(results_dir):
 def test_csv_leaves_undefined_shares_empty(results_dir):
     run_report()
     text = (results_dir / "report/per_benchmark.csv").read_text()
-    assert text.splitlines()[-1].startswith("zxing,,,0,0,")
+    assert text.splitlines()[-1].startswith("zxing,,0,0,0,")
 
 
 def test_markdown_shows_undefined_shares(results_dir):
     run_report()
     markdown = (results_dir / "report/report.md").read_text()
     zxing_line = next(line for line in markdown.splitlines() if "zxing" in line)
-    assert zxing_line.count("N/A") == 2
+    assert zxing_line.count("N/A") == 1
 
 
 def test_invalid_worksheet_stops_report(results_dir):

@@ -40,7 +40,6 @@ FAILURE_COLUMNS = {check: f"fails_{check}" for check in Check}
 # Columns that open each benchmark's row, before the other summary columns
 LEADING_COLUMNS = (
     "benchmark",
-    "time_share",
     "count_share",
     "hot_loops",
     "sampled_loops",
@@ -115,42 +114,49 @@ def compute_benchmark_results(
         .agg(
             pl.len().alias("sampled_loops"),
             is_convertible.sum().alias("convertible_loops"),
-            pl.col("samples").filter(is_convertible).sum().alias("convertible_samples"),
-            pl.col("samples").sum().alias("hot_samples"),
             *failure_counts,
         )
     )
     count_columns = [
         "sampled_loops",
         "convertible_loops",
-        "convertible_samples",
         *FAILURE_COLUMNS.values(),
     ]
     # A share is undefined for a benchmark without sampled loops
     has_sampled_loops = pl.col("sampled_loops") != 0
-    time_share = pl.col("convertible_samples") / pl.col("hot_samples")
     count_share = pl.col("convertible_loops") / pl.col("sampled_loops")
 
     return (
         summary.join(counts, on="benchmark", how="left")
         .with_columns(pl.col(count_columns).fill_null(0).cast(pl.Int64))
-        .with_columns(
-            time_share=pl.when(has_sampled_loops).then(time_share),
-            count_share=pl.when(has_sampled_loops).then(count_share),
-        )
+        .with_columns(count_share=pl.when(has_sampled_loops).then(count_share))
         .select(BENCHMARK_RESULT_COLUMNS)
         .sort("benchmark")
     )
 
 
-def compute_overall_results(benchmark_results: pl.DataFrame) -> pl.DataFrame:
-    """Compute the unweighted mean shares of the benchmarks with sampled loops"""
-    with_sampled_loops = benchmark_results.filter(pl.col("sampled_loops") != 0)
+def compute_overall_results(
+    sampled_loops: pl.DataFrame,
+    worksheet: pl.DataFrame,
+) -> pl.DataFrame:
+    """Compute the share of convertible loops among the distinct sampled loops"""
+    verdicts = worksheet.select("loop_id", "verdict")
+    convertible_loops = (pl.col("verdict") == Verdict.CONVERTIBLE).sum()
+    sampled_loops_count = pl.len()
+    # A share is undefined without sampled loops
+    count_share = pl.when(sampled_loops_count != 0).then(
+        convertible_loops / sampled_loops_count
+    )
 
-    return with_sampled_loops.select(
-        pl.col("time_share").mean().alias("mean_time_share"),
-        pl.col("count_share").mean().alias("mean_count_share"),
-        pl.len().cast(pl.Int64).alias("benchmarks"),
+    # A loop shared by several benchmarks counts once
+    return (
+        sampled_loops.unique("loop_id")
+        .join(verdicts, on="loop_id", how="left")
+        .select(
+            count_share.alias("count_share"),
+            convertible_loops.cast(pl.Int64).alias("convertible_loops"),
+            sampled_loops_count.cast(pl.Int64).alias("sampled_loops"),
+        )
     )
 
 
@@ -181,7 +187,7 @@ def report(
     jar_version = read_jar_version(benchmarks_dir / config.jar_name)
 
     benchmark_results = compute_benchmark_results(sampled_loops, summary, worksheet)
-    overall_results = compute_overall_results(benchmark_results)
+    overall_results = compute_overall_results(sampled_loops, worksheet)
     report_dir = out_dir / REPORT_DIR_NAME
     report_dir.mkdir(parents=True, exist_ok=True)
     benchmark_results.write_csv(
