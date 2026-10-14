@@ -1,4 +1,3 @@
-#!/usr/bin/env -S uv run
 import argparse
 import csv
 import importlib.metadata
@@ -10,7 +9,7 @@ import subprocess
 import sys
 import textwrap
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 
@@ -411,7 +410,7 @@ def list_benchmarks(jarfile: Path) -> list[str]:
 
 def parse_args() -> ParsedArgs:
     parser = argparse.ArgumentParser(
-        description="Find the minimum heap size of DaCapo benchmarks",
+        description="Find the minimum heap size required by DaCapo benchmarks in different JDKs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         color=False,
         epilog=textwrap.dedent(f"""
@@ -477,14 +476,15 @@ def parse_args() -> ParsedArgs:
 
     args = parser.parse_args()
 
-    out_dir = getattr(args, "out_dir", None) or get_default_out_dir(args.jarfile.stem)
+    jarfile = args.jarfile
+    out_dir = getattr(args, "out_dir", None) or get_default_out_dir(jarfile.stem)
     max_mem_mb = getattr(args, "max_mem_mb", None) or get_default_max_mem()
     jdks = args.jdks.split()
     gc_opts = shlex.split(args.gc_opts)
-    benchmarks = getattr(args, "benchmarks", "").split() or list_benchmarks(args.jarfile)
+    benchmarks = getattr(args, "benchmarks", "").split() or list_benchmarks(jarfile)
 
     return ParsedArgs(
-        jarfile=args.jarfile,
+        jarfile=jarfile,
         out_dir=out_dir,
         max_mem_mb=max_mem_mb,
         jdks=jdks,
@@ -505,7 +505,7 @@ def save_execution_context(ctx: ExecutionContext) -> None:
 
 # --- Orchestration ---
 def main() -> None:
-    start_time = datetime.now(timezone.utc)
+    start_time = datetime.now(UTC)
     args = parse_args()
 
     jdks = discover_jdks(args.jdks)

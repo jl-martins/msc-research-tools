@@ -1,21 +1,25 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
 [project]
 name = "format-comparisons"
 version = "0.1.0"
-description = "Format comparisons based on effect size confidence intervals"
+description = "Format effect-size comparisons into Excel workbooks"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "openpyxl~=3.1.5",
-    "polars~=1.42.1",
+    "polars~=1.44.2",
 ]
 
 [dependency-groups]
 dev = [
-    "ruff~=0.15.16",
+    "ruff~=0.16.10",
     "types-openpyxl~=3.1.5.20260518",
 ]
 
 [project.scripts]
-format-comparisons = "format_comparisons:main"
+format-comparisons = "format_comparisons.cli:main"
 
 [tool.uv]
 package = true

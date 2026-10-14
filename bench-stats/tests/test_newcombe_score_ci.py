@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from effect_sizes import newcombe_score_ci
+from bench_stats.effect_sizes import newcombe_score_ci
 
 # Seeded normal samples, rounded to produce ties, with shifts that range from none
 # to full separation

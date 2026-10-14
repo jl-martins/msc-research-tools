@@ -23,8 +23,8 @@ from scipy.stats import (
     rankdata,
 )
 
-from measurements import JdkVersion, Metric, SampleKey, sort_jdks
-from rank_corr import ClusteredCorrelation, total_spearman
+from bench_stats.measurements import JdkVersion, Metric, SampleKey, sort_jdks
+from bench_stats.rank_corr import ClusteredCorrelation, total_spearman
 
 logger = logging.getLogger(__name__)
 

@@ -29,9 +29,9 @@ from matplotlib.lines import Line2D
 from matplotlib.scale import SymmetricalLogTransform
 from matplotlib.ticker import FuncFormatter, SymmetricalLogLocator
 
-from effect_sizes import ALPHA, EffectSize, clustered_spearman
-from jobs import Job
-from measurements import JdkVersion, Metric, get_jdk_labels, sort_jdks
+from bench_stats.effect_sizes import ALPHA, EffectSize, clustered_spearman
+from bench_stats.jobs import Job
+from bench_stats.measurements import JdkVersion, Metric, get_jdk_labels, sort_jdks
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +104,11 @@ def apply_style() -> None:
         "pgf.texsystem": "lualatex",
         "pgf.preamble": "\n".join([
             r"\usepackage{fontspec}",
-            rf"\setmainfont{{{regular_file}}}"
-            rf"[Path=\detokenize{{{font_directory.resolve().as_posix()}/}},"
-            rf"BoldFont={bold_file}]",
+            (
+                rf"\setmainfont{{{regular_file}}}"
+                rf"[Path=\detokenize{{{font_directory.resolve().as_posix()}/}},"
+                rf"BoldFont={bold_file}]"
+            ),
         ]),
     })  # fmt: skip
 

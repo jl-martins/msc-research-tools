@@ -10,16 +10,19 @@ import polars as pl
 import pytest
 from matplotlib.colors import to_rgba
 
-from effect_sizes import (
+from bench_stats.effect_sizes import (
     ConfidenceInterval,
     compare_metric,
     generate_energy_summary_by_jdk_table,
     generate_energy_summary_table,
     generate_energy_time_correlation_table,
 )
-from measurements import SampleKey, get_jdk_labels, parse_jdk_version
-from plots import format_scatter_statistics, render_energy_time_scatter_panel
-from rank_corr import total_spearman
+from bench_stats.measurements import SampleKey, get_jdk_labels, parse_jdk_version
+from bench_stats.plots import (
+    format_scatter_statistics,
+    render_energy_time_scatter_panel,
+)
+from bench_stats.rank_corr import total_spearman
 
 KEY = SampleKey("cold", "temurin-21", "streams", "fop")
 METRIC = "PackageAndDRAM"

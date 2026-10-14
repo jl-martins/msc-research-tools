@@ -1,21 +1,25 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
 [project]
 name = "dacapo-min-heap"
 version = "0.1.0"
-description = "Find the minimum heap size of DaCapo benchmarks"
+description = "Find the minimum heap size required by DaCapo benchmarks in different JDKs"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "psutil~=7.2.2",
-    "pydantic~=2.13.4",
+    "pydantic~=2.13.5",
 ]
 
 [dependency-groups]
 dev = [
-    "ruff~=0.15.16",
+    "ruff~=0.16.10",
     "types-psutil~=7.2.2.20260518",
 ]
 
 [project.scripts]
-dacapo-min-heap = "dacapo_min_heap:main"
+dacapo-min-heap = "dacapo_min_heap.cli:main"
 
 [tool.uv]
 package = true

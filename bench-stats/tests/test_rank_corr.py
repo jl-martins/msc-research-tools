@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from scipy.stats import spearmanr
 
-from rank_corr import (
+from bench_stats.rank_corr import (
     MIN_CLUSTERS,
     cluster_weights,
     dense_ranks,

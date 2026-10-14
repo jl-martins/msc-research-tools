@@ -1,9 +1,7 @@
-#!/usr/bin/env -S uv run
-
 """
 Aggregate benchmark results using non-parametric statistics.
 
-This script recursively processes files matching:
+This command recursively processes files matching:
 
     <root>/<scenario>/<jdk>/<implementation>/<benchmark>/measurements.csv
 
@@ -60,19 +58,19 @@ from typing import NamedTuple
 
 import polars as pl
 
-from effect_sizes import (
+from bench_stats.effect_sizes import (
     BOOTSTRAP_DEFAULT_N_RESAMPLES,
     ComparisonRow,
     EffectSize,
     build_long_time_and_energy_table,
     compare_metric,
-    generate_energy_time_summary_table,
     generate_energy_summary_by_jdk_table,
     generate_energy_summary_table,
     generate_energy_time_correlation_table,
+    generate_energy_time_summary_table,
 )
-from jobs import Job, JobKey, run_jobs, worker_pool
-from measurements import (
+from bench_stats.jobs import Job, JobKey, run_jobs, worker_pool
+from bench_stats.measurements import (
     BASELINE_DIR_NAME,
     MEASUREMENTS_FILE_NAME,
     METRICS,
@@ -83,7 +81,7 @@ from measurements import (
     is_non_baseline_dir,
     load_and_clean_measurements,
 )
-from plots import (
+from bench_stats.plots import (
     EFFECT_SIZE_STYLES,
     FONT_DIR_ENV_VAR,
     FONT_FILES,

@@ -10,9 +10,9 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-import plots
-from bench_stats import run
-from measurements import load_and_clean_measurements, read_measurements
+from bench_stats import plots
+from bench_stats.cli import run
+from bench_stats.measurements import load_and_clean_measurements, read_measurements
 
 HEADER = [
     "Language", "Program", "Powercap", "Package", "Core",
@@ -183,9 +183,7 @@ def test_energy_time_summary_table_matches_comparisons(completed_run: Path):
     time = statistics("Time", "Time", r"$\Delta t_{\mathrm{med}}(\%)$")
     expected_keys = [(jdk, benchmark) for jdk in JDKS for benchmark in BENCHMARKS]
     assert table.select("JDK", "Program").rows() == expected_keys
-    assert_frame_equal(
-        table.drop("JDK", "Program"), pl.concat([energy, time], how="horizontal")
-    )
+    assert_frame_equal(table.drop("JDK", "Program"), energy.hstack(time))
 
 
 def test_every_plot_fits_the_page(completed_run: Path):

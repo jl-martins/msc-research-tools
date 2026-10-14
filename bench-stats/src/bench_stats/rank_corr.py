@@ -234,8 +234,10 @@ def total_spearman(
 
     # Like `rankCorr`, drop the observations that miss a value
     missing = np.isnan(x_values) | np.isnan(y_values)
+    # `label != label` detects NaN labels of any type, as NaN differs from itself
     missing |= np.array(
-        [label is None or label != label for label in labels], dtype=bool
+        [label is None or label != label for label in labels],  # noqa: PLR0124
+        dtype=bool,
     )
 
     if missing.any():

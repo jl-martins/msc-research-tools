@@ -1,4 +1,3 @@
-#!/usr/bin/env -S uv run
 import argparse
 import logging
 from pathlib import Path
@@ -125,7 +124,7 @@ def format_comparisons(root_dir: Path, effect_size: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Format comparisons based on effect size confidence intervals",
+        description="Format effect-size comparisons into Excel workbooks",
         color=False,
     )
     parser.add_argument(
