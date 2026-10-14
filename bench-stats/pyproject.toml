@@ -2,7 +2,7 @@
 name = "bench-stats"
 version = "0.1.0"
 description = "Generate benchmark statistics for Master's Dissertation"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "adjusttext~=1.4.0",
     "inflection~=0.5.1",

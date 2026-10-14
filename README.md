@@ -22,15 +22,15 @@ The following sections explain how to install, use and uninstall each tool.
 
 * **dacapo-hot-loops**
   * OS: Linux for `profile`, any POSIX-compliant operating system otherwise
-  * Dependencies: [Java](https://www.oracle.com/java/) (21), [Python](https://www.python.org/) (>= 3.14), [uv](https://docs.astral.sh/uv/), [jfrconv](https://github.com/async-profiler/async-profiler/blob/master/docs/ConverterUsage.md), [GNU patch](https://savannah.gnu.org/software/patch/) (ahead of any other `patch` on `PATH`)
+  * Dependencies: [Java](https://www.oracle.com/java/) (21), [Python](https://www.python.org/) (3.14), [uv](https://docs.astral.sh/uv/), [jfrconv](https://github.com/async-profiler/async-profiler/blob/master/docs/ConverterUsage.md), [GNU patch](https://savannah.gnu.org/software/patch/) (ahead of any other `patch` on `PATH`)
 
 * **dacapo-min-heap**
   * OS: Any POSIX-compliant operating system
-  * Dependencies: [Java](https://www.oracle.com/java/), [Python](https://www.python.org/) (>= 3.14), [uv](https://docs.astral.sh/uv/)
+  * Dependencies: [Java](https://www.oracle.com/java/), [Python](https://www.python.org/) (3.14), [uv](https://docs.astral.sh/uv/)
 
 * **bench-stats** and **format-comparisons**
   * OS: Cross-platform (Linux, macOS, Windows, etc.)
-  * Dependencies: [Python](https://www.python.org/) (>= 3.14), [uv](https://docs.astral.sh/uv/)
+  * Dependencies: [Python](https://www.python.org/) (3.14), [uv](https://docs.astral.sh/uv/)
 
 ## Installation
 
