@@ -448,7 +448,7 @@ def parse_args() -> ParsedArgs:
         "--gc-opts",
         type=non_blank_str,
         default=DEFAULT_GC_OPTIONS,
-        help=f"configure garbage collector options as a single, space-separated string (default: '{DEFAULT_GC_OPTIONS}')",
+        help=f"configure Java garbage collector options as a single, space-separated string (default: '{DEFAULT_GC_OPTIONS}')",
     )
     parser.add_argument(
         "--benchmarks",

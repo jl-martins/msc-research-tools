@@ -530,13 +530,13 @@ def main() -> None:
         "--jobs",
         type=positive_int,
         default=os.process_cpu_count() or 1,
-        help="worker processes to spread the statistics and plots over (default: %(default)s)",
+        help="set the number of worker processes to spread the statistics and plots over (default: %(default)s)",
     )
     parser.add_argument(
         "--resamples",
         type=positive_int,
         default=BOOTSTRAP_DEFAULT_N_RESAMPLES,
-        help="resamples of every bootstrap confidence interval (default: %(default)s)",
+        help="set the number of resamples of every bootstrap confidence interval (default: %(default)s)",
     )
     parser.add_argument(
         "--verbose",

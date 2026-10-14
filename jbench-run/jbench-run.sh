@@ -161,8 +161,8 @@ Options:
                                  (default: '${DEFAULT_JDKS[*]}')
   --heap-multiplier N            set each benchmark's Java heap size to N times
                                  its minimum value (default: $DEFAULT_HEAP_MULTIPLIER)
-  --gc-opts GC_OPTS              configure the Java garbage collector options as a
-                                 single, space-separated string (default: '${DEFAULT_GC_OPTIONS[*]}')
+  --gc-opts GC_OPTS              configure Java garbage collector options as a single,
+                                 space-separated string (default: '${DEFAULT_GC_OPTIONS[*]}')
   --artifact-dir DIR             search for benchmark suite JARs in DIR
                                  (default: $DEFAULT_ARTIFACT_DIR)
   --suite-name SUITE_NAME        set the name of the benchmark suite (required)
@@ -170,13 +170,11 @@ Options:
                                  implementation suffix (required)
   --suite-additional-opts OPTS   provide additional options for the benchmark suite
                                  (default: None)
-  --benchmarks BMS               run the specified benchmarks, provided as a single,
-                                 space-separated string
+  --benchmarks BMS               select benchmarks as a single, space-separated string
                                  (default: use the get_default_benchmarks function from
                                   the suite configuration script to get the list of
                                   benchmarks for each Java version)
-  --implementations IMPLS        run the specified implementations, provided as
-                                 a single, space-separated string
+  --implementations IMPLS        select implementations as a single, space-separated string
                                  (default: use DEFAULT_IMPLEMENTATIONS from the suite
                                   configuration script)
   --invocations N                invoke each benchmark N times per implementation and

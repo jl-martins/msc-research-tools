@@ -89,12 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         required=True,
-        help="study config file",
+        help="read the study config from this file",
     )
     common_parser.add_argument(
         "--out",
         type=Path,
-        help="results directory (default: the config's results_dir)",
+        help="store the results in this directory (default: the config's results_dir)",
     )
 
     def add_command(
@@ -139,7 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         dest="source_dir",
         metavar="DIR",
-        help="benchmarks directory that holds the profiles in bms/<bm>/",
+        help="import profiles from the bms/<bm>/ subdirectories of this directory",
     )
     add_command("analyze", run_analyze, "find the hot loops")
     add_command("worksheet", run_worksheet, "write the classification worksheet")
