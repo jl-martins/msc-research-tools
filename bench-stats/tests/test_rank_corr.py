@@ -106,7 +106,7 @@ def test_both_variances_share_the_estimate():
         dataset["x"], dataset["y"], dataset["cluster"], variance="rankcorr"
     )
 
-    assert shih_fay.estimate == rankcorr.estimate
+    assert shih_fay.estimate == pytest.approx(rankcorr.estimate, rel=1e-12)
     assert shih_fay.se != rankcorr.se  # the study clusters have unequal sizes
 
 
@@ -245,7 +245,11 @@ def test_integer_and_float_labels_group_the_same_clusters():
     by_integer = total_spearman(x, y, cluster)
     by_float = total_spearman(x, y, cluster.astype(float))
 
-    assert by_float == by_integer
+    assert by_float.estimate == pytest.approx(by_integer.estimate, rel=1e-12)
+    assert by_float.se == pytest.approx(by_integer.se, rel=1e-12)
+    assert by_float.low == pytest.approx(by_integer.low, rel=1e-12)
+    assert by_float.high == pytest.approx(by_integer.high, rel=1e-12)
+    assert (by_float.n_clusters, by_float.n_obs) == (4, 14)
 
 
 def test_integer_and_string_labels_group_the_same_clusters():
@@ -254,4 +258,8 @@ def test_integer_and_string_labels_group_the_same_clusters():
     by_integer = total_spearman(x, y, cluster)
     by_string = total_spearman(x, y, [f"program-{label}" for label in cluster])
 
-    assert by_string == by_integer
+    assert by_string.estimate == pytest.approx(by_integer.estimate, rel=1e-12)
+    assert by_string.se == pytest.approx(by_integer.se, rel=1e-12)
+    assert by_string.low == pytest.approx(by_integer.low, rel=1e-12)
+    assert by_string.high == pytest.approx(by_integer.high, rel=1e-12)
+    assert (by_string.n_clusters, by_string.n_obs) == (5, 18)
