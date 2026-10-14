@@ -74,7 +74,7 @@ $(uv_tools): | $(sysconfdir)
 		cp -R "$@/config/." "$(sysconfdir)/$@/"; \
 		find "$(sysconfdir)/$@/" -type f -exec chmod $(sysconfmod) {} +; \
 	fi
-	@rm -rf $@/build $@/*.egg-info $@/__pycache__
+	@rm -rf $@/build $@/src/*.egg-info $@/src/__pycache__
 	$(log_done)
 
 # ==============================================================================

@@ -21,9 +21,6 @@ dev = [
 [project.scripts]
 dacapo-hot-loops = "dacapo_hot_loops.cli:main"
 
-[tool.setuptools]
-packages = ["dacapo_hot_loops"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
