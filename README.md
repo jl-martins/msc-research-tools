@@ -7,7 +7,7 @@ The tools and their purposes are summarized below:
 | Tool                  | Language | Purpose                                                                      |
 | --------------------- | -------- | ---------------------------------------------------------------------------- |
 | `bench-stats`         | python   | Aggregate results and computes non-parametric summary statistics.            |
-| `dacapo-hot-loops`    | python   | Find hot loops in DaCapo benchmark profiles.                                 |
+| `dacapo-hot-loops`    | python   | Find and analyze hot loops in DaCapo benchmarks.                             |
 | `dacapo-min-heap`     | python   | Find the minimum heap size required by DaCapo benchmarks in different JDKs.  |
 | `format-comparisons`  | python   | Format effect-size comparisons into Excel workbooks.                         |
 | `jbench-run`          | bash     | Run multiple implementations of a Java benchmark suite across multiple JDKs. |

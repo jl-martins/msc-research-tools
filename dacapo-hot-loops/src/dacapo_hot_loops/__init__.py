@@ -1,4 +1,4 @@
-"""Find hot loops in DaCapo benchmark profiles"""
+"""Find and analyze hot loops in DaCapo benchmarks"""
 
 
 class HotLoopsError(Exception):

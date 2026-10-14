@@ -1,7 +1,7 @@
 [project]
 name = "dacapo-hot-loops"
 version = "0.1.0"
-description = "Find hot loops in DaCapo benchmark profiles"
+description = "Find and analyze hot loops in DaCapo benchmarks"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "polars~=1.44.2",

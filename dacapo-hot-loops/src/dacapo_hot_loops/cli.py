@@ -79,7 +79,7 @@ def non_blank_str(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dacapo-hot-loops",
-        description="Find hot loops in DaCapo benchmark profiles",
+        description="Find and analyze hot loops in DaCapo benchmarks",
         color=False,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
