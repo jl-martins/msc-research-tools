@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from dacapo_hot_loops import HotLoopsError
-from dacapo_hot_loops.build import run_command
+from dacapo_hot_loops.build import resolve_benchmarks_dir, run_command
 from dacapo_hot_loops.config import JvmFlagRule, StudyConfig
 
 logger = logging.getLogger(__name__)
@@ -152,12 +152,8 @@ def profile_benchmark(
         raise HotLoopsError(f"Missing profile files: {', '.join(missing_files)}")
 
 
-def profile(
-    config: StudyConfig,
-    benchmarks_dir: Path,
-    out_dir: Path,
-    benchmarks: list[str],
-) -> None:
+def profile(config: StudyConfig, out_dir: Path, benchmarks: list[str]) -> None:
+    """Profile the loop-based implementation of the benchmarks"""
     unknown_benchmarks = [bm for bm in benchmarks if bm not in config.benchmarks]
     if unknown_benchmarks:
         raise HotLoopsError(f"Unknown benchmarks: {', '.join(unknown_benchmarks)}")
@@ -171,7 +167,8 @@ def profile(
 
     # The commands run in a temporary directory, so every path is absolute
     profiles_dir = out_dir.resolve() / "profiles"
-    jar = (benchmarks_dir / config.jar_name).resolve()
+    benchmarks_dir = resolve_benchmarks_dir(config, "loops")
+    jar = (benchmarks_dir / config.implementation("loops").jar_name).resolve()
     require_new_dirs(profiles_dir / bm for bm in benchmarks)
 
     failed_benchmarks = []

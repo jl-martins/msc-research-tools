@@ -10,9 +10,11 @@ from pathlib import Path, PurePath
 from typing import NamedTuple
 
 from dacapo_hot_loops import HotLoopsError
+from dacapo_hot_loops.build import resolve_benchmarks_dir
 from dacapo_hot_loops.config import (
     BenchmarkConfig,
     FileMarker,
+    Implementation,
     LineMarker,
     SourcesConfig,
     StreamsMarker,
@@ -182,7 +184,10 @@ def jar_problems(jar: Path, jar_version: str) -> Iterator[str]:
 def marker_problems(
     benchmarks_dir: Path,
     markers: list[StreamsMarker],
+    implementation: Implementation,
 ) -> Iterator[str]:
+    # Only the stream-based implementation holds the markers
+    expects_markers = implementation == "streams"
     for marker in markers:
         file = benchmarks_dir / marker.path
         match marker:
@@ -191,11 +196,17 @@ def marker_problems(
                     yield f"Streams marker file '{file}' does not exist"
                 else:
                     text = file.read_text(encoding="utf-8-sig", errors="replace")
-                    if any(line.strip() == stream_line for line in text.splitlines()):
+                    lines = (line.strip() for line in text.splitlines())
+                    has_line = stream_line in lines
+                    if has_line and not expects_markers:
                         yield f"Streams marker file '{file}' contains {stream_line!r}"
+                    elif expects_markers and not has_line:
+                        yield f"Streams marker file '{file}' lacks {stream_line!r}"
             case FileMarker():
-                if file.exists():
+                if file.exists() and not expects_markers:
                     yield f"Streams-only file '{file}' exists"
+                elif expects_markers and not file.exists():
+                    yield f"Streams-only file '{file}' does not exist"
 
 
 def root_problems(
@@ -211,14 +222,22 @@ def root_problems(
                 yield f"Source root '{root_dir}' of {name} contains no .java files"
 
 
-def check_sources(config: StudyConfig, benchmarks_dir: Path) -> dict[str, int]:
+def check_sources(
+    config: StudyConfig,
+    implementation: Implementation,
+) -> dict[str, int]:
     """Check the jar and the source trees, and return each benchmark's class count"""
-    jar = benchmarks_dir / config.jar_name
+    benchmarks_dir = resolve_benchmarks_dir(config, implementation)
+    implementation_config = config.implementation(implementation)
+    jar = benchmarks_dir / implementation_config.jar_name
     sources, java_major = config.sources, config.java_major
-    logger.info("Checking DaCapo JAR, streams markers and source roots...")
+    logger.info(
+        "Checking DaCapo JAR, streams markers and source roots of '%s' implementation...",
+        implementation,
+    )
     problems = [
-        *jar_problems(jar, config.jar_version),
-        *marker_problems(benchmarks_dir, config.streams_markers),
+        *jar_problems(jar, implementation_config.jar_version),
+        *marker_problems(benchmarks_dir, config.streams_markers, implementation),
         *root_problems(benchmarks_dir, config.benchmarks),
     ]
 

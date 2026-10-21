@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from dacapo_hot_loops import HotLoopsError
-from dacapo_hot_loops.config import DacapoConfig, StudyConfig
+from dacapo_hot_loops.config import (
+    ExistingSource,
+    Implementation,
+    StudyConfig,
+    WorktreeSource,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,33 +48,37 @@ def run_optional_command(command: list[str], **kwargs: Any) -> None:
         run_command(command, **kwargs)
 
 
-def resolve_benchmarks_dir(dacapo: DacapoConfig) -> Path:
-    if dacapo.mode == "existing":
-        assert dacapo.dir is not None
-        return dacapo.dir
-    else:
-        assert dacapo.worktree is not None
-        return dacapo.worktree.path / "benchmarks"
+def resolve_benchmarks_dir(config: StudyConfig, implementation: Implementation) -> Path:
+    match config.implementation(implementation).source:
+        case ExistingSource(dir=benchmarks_dir):
+            return benchmarks_dir
+        case WorktreeSource(path=path):
+            return path / "benchmarks"
 
 
-def prepare(config: StudyConfig, out_dir: Path) -> Path:
-    """Build DaCapo if mode is `worktree`, then return the benchmarks directory"""
-    if config.dacapo.mode == "worktree":
-        build_worktree(config, out_dir)
+def prepare(config: StudyConfig, out_dir: Path) -> None:
+    """Build every implementation whose source is a worktree"""
+    for implementation, implementation_config in config.implementations.items():
+        if isinstance(implementation_config.source, WorktreeSource):
+            build_worktree(config, implementation, out_dir)
 
-    return resolve_benchmarks_dir(config.dacapo)
 
-
-def build_worktree(config: StudyConfig, out_dir: Path) -> None:
+def build_worktree(
+    config: StudyConfig,
+    implementation: Implementation,
+    out_dir: Path,
+) -> None:
     worktree = config.dacapo.worktree
-    assert worktree is not None
+    implementation_config = config.implementation(implementation)
+    source = implementation_config.source
+    assert worktree is not None and isinstance(source, WorktreeSource)
     executables = config.executables
-    benchmarks_dir = worktree.path / "benchmarks"
+    benchmarks_dir = source.path / "benchmarks"
 
-    if worktree.path.exists():
-        raise HotLoopsError(f"Worktree path '{worktree.path}' already exists")
+    if source.path.exists():
+        raise HotLoopsError(f"Worktree path '{source.path}' already exists")
 
-    logger.info(f"Creating worktree of '{worktree.branch}' at '{worktree.path}'...")
+    logger.info(f"Creating worktree of '{source.branch}' at '{source.path}'...")
     # `git -C` would resolve a relative worktree path against the repository
     git_command = [
         executables.git,
@@ -77,8 +86,8 @@ def build_worktree(config: StudyConfig, out_dir: Path) -> None:
         str(worktree.repository),
         "worktree",
         "add",
-        str(worktree.path.absolute()),
-        worktree.branch,
+        str(source.path.absolute()),
+        source.branch,
     ]
     run_command(git_command, capture_output=True)
 
@@ -95,17 +104,17 @@ def build_worktree(config: StudyConfig, out_dir: Path) -> None:
     pinned_commands = [
         command
         for command, manifests in installs
-        if any((worktree.path / name).is_file() for name in manifests)
+        if any((source.path / name).is_file() for name in manifests)
     ]
     for command in pinned_commands:
-        logger.info(f"Running '{shlex.join(command)}' in '{worktree.path}'...")
-        run_optional_command(command, cwd=worktree.path, capture_output=True)
+        logger.info(f"Running '{shlex.join(command)}' in '{source.path}'...")
+        run_optional_command(command, cwd=source.path, capture_output=True)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    build_log = out_dir / "build.log"
+    build_log = out_dir / f"build-{implementation}.log"
     ant_command = [executables.ant, *worktree.ant_dist_options, "dist"]
     # The build runs `python`, which needs the modules synced in the worktree
-    venv_dir = worktree.path / ".venv"
+    venv_dir = source.path / ".venv"
     path_entries = [str(venv_dir / "bin"), os.environ.get("PATH", "")]
     ant_env = os.environ | {
         "JAVA_HOME": str(worktree.ant_java_home),
@@ -123,6 +132,6 @@ def build_worktree(config: StudyConfig, out_dir: Path) -> None:
             stderr=subprocess.STDOUT,
         )
 
-    jar = benchmarks_dir / config.jar_name
+    jar = benchmarks_dir / implementation_config.jar_name
     if not jar.is_file():
         raise HotLoopsError(f"The build did not produce '{jar}'")

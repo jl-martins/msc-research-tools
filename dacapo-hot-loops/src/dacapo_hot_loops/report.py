@@ -15,6 +15,7 @@ from dacapo_hot_loops.analysis import (
     SUMMARY_SCHEMA,
     write_provenance,
 )
+from dacapo_hot_loops.build import resolve_benchmarks_dir
 from dacapo_hot_loops.config import StudyConfig
 from dacapo_hot_loops.sample import sample_hot_loops
 from dacapo_hot_loops.sources import read_jar_version
@@ -196,12 +197,7 @@ def markdown_table(table: pl.DataFrame) -> str:
     )
 
 
-def report(
-    config: StudyConfig,
-    config_path: Path,
-    benchmarks_dir: Path,
-    out_dir: Path,
-) -> None:
+def report(config: StudyConfig, config_path: Path, out_dir: Path) -> None:
     """Validate the worksheet, then write the report tables and provenance"""
     hot_loops = read_analysis_table(out_dir, HOT_LOOPS_NAME, LOOP_SCHEMA)
     sampled_loops = sample_hot_loops(hot_loops, config.sample)
@@ -209,8 +205,11 @@ def report(
     worksheet_path = out_dir / WORKSHEET_NAME
     worksheet = read_worksheet(worksheet_path)
     validate_worksheet(worksheet, sampled_loops)
+    # The hot loops come from the loop-based implementation
+    benchmarks_dir = resolve_benchmarks_dir(config, "loops")
     # Read first so an unreadable jar fails before any table is written
-    jar_version = read_jar_version(benchmarks_dir / config.jar_name)
+    jar_name = config.implementation("loops").jar_name
+    jar_version = read_jar_version(benchmarks_dir / jar_name)
 
     benchmark_results = compute_benchmark_results(sampled_loops, summary, worksheet)
     population_size = hot_loops["loop_id"].n_unique()

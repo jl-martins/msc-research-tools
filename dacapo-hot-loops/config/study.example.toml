@@ -1,21 +1,34 @@
 results_dir = "/path/to/results/hot-loops"
-jar_name = "dacapo-23.11-MR2-chopin-jlm-loops.jar"
-jar_version = "23.11-MR2-chopin-jlm-loops"
 # Major version of the profiling JDK
 java_major = 21
 
 [executables]
 java = "/path/to/temurin-21/bin/java"
 
-[dacapo]
-mode = "existing"
+# The commands that find and classify hot loops use the loop-based implementation
+[implementations.loops]
+jar_name = "dacapo-23.11-MR2-chopin-jlm-loops.jar"
+jar_version = "23.11-MR2-chopin-jlm-loops"
+
+# A DaCapo build that already exists
+[implementations.loops.source]
+kind = "existing"
 dir = "/path/to/msc-dacapobench/benchmarks"
 
-# Used when mode = "worktree", to replicate the build from scratch
+# Only `coverage` needs the stream-based implementation
+[implementations.streams]
+jar_name = "dacapo-23.11-MR2-chopin-jlm-streams.jar"
+jar_version = "23.11-MR2-chopin-jlm-streams"
+
+# A git worktree that `prepare` creates and builds from scratch
+[implementations.streams.source]
+kind = "worktree"
+branch = "chopin-streams"
+path = "/path/to/msc-dacapobench-streams"
+
+# Settings shared by every source of kind "worktree"
 [dacapo.worktree]
 repository = "/path/to/msc-dacapobench"
-branch = "chopin-loops"
-path = "/path/to/msc-dacapobench-loops"
 ant_java_home = "/path/to/temurin-8"
 ant_dist_options = ["-Dbuild.is-official=true"]
 

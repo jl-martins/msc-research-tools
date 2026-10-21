@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 import pytest
-from conftest import DATA_DIR, write_executable, write_file
+from conftest import DATA_DIR, write_config_variant, write_executable, write_file
 
 from dacapo_hot_loops import HotLoopsError
 from dacapo_hot_loops.cli import main
@@ -113,11 +113,11 @@ def test_java_major_version_is_parsed(tmp_path, version, expected_major):
 
 
 def test_wrong_java_version_fails(study_dir, caplog):
-    java = write_fake_java(study_dir / "bin/java", "17.0.18")
-    config_path = Path("study.toml")
-    config_path.write_text(config_path.read_text().replace('"java"', f'"{java}"'))
+    java_17 = write_fake_java(study_dir / "bin/java", "17.0.18")
+    write_config_variant(study_dir, '"java"', f'"{java_17}"')
     with pytest.raises(SystemExit):
         main(["profile", "--config", "study.toml", "--out", "out"])
+
     assert "Java is version 17, expected 21" in caplog.text
     assert not Path("out").exists()
 

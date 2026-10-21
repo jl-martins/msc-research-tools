@@ -8,8 +8,9 @@ from pathlib import Path
 
 from dacapo_hot_loops import HotLoopsError
 from dacapo_hot_loops.analysis import analyze
-from dacapo_hot_loops.build import prepare, resolve_benchmarks_dir
+from dacapo_hot_loops.build import prepare
 from dacapo_hot_loops.config import StudyConfig, load_config
+from dacapo_hot_loops.coverage import coverage
 from dacapo_hot_loops.profiler import import_profiles, profile
 from dacapo_hot_loops.report import report
 from dacapo_hot_loops.sources import check_sources
@@ -21,9 +22,8 @@ type CommandHandler = Callable[[argparse.Namespace, StudyConfig, Path], None]
 
 
 def run_prepare(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
-    benchmarks_dir = prepare(config, out_dir)
-    check_sources(config, benchmarks_dir)
-    logger.info("All source checks passed, with no ambiguous classes")
+    prepare(config, out_dir)
+    run_check_sources(args, config, out_dir)
 
 
 def run_check_sources(
@@ -31,19 +31,19 @@ def run_check_sources(
     config: StudyConfig,
     out_dir: Path,
 ) -> None:
-    benchmarks_dir = resolve_benchmarks_dir(config.dacapo)
-    check_sources(config, benchmarks_dir)
+    for implementation in config.implementations:
+        check_sources(config, implementation)
+
     logger.info("All source checks passed, with no ambiguous classes")
 
 
 def run_profile(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
-    benchmarks_dir = resolve_benchmarks_dir(config.dacapo)
     if args.benchmarks is not None:
         benchmarks = args.benchmarks.split()
     else:
         benchmarks = list(config.benchmarks)
 
-    profile(config, benchmarks_dir, out_dir, benchmarks)
+    profile(config, out_dir, benchmarks)
 
 
 def run_import_profiles(
@@ -56,8 +56,7 @@ def run_import_profiles(
 
 
 def run_analyze(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
-    benchmarks_dir = resolve_benchmarks_dir(config.dacapo)
-    analyze(config, args.config, benchmarks_dir, out_dir)
+    analyze(config, args.config, out_dir)
 
 
 def run_worksheet(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
@@ -65,8 +64,11 @@ def run_worksheet(args: argparse.Namespace, config: StudyConfig, out_dir: Path) 
 
 
 def run_report(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
-    benchmarks_dir = resolve_benchmarks_dir(config.dacapo)
-    report(config, args.config, benchmarks_dir, out_dir)
+    report(config, args.config, out_dir)
+
+
+def run_coverage(args: argparse.Namespace, config: StudyConfig, out_dir: Path) -> None:
+    coverage(config, args.config, out_dir)
 
 
 def non_blank_str(value: str) -> str:
@@ -115,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_command(
         "prepare",
         run_prepare,
-        "build DaCapo in a new git worktree (worktree mode only), then run check-sources",
+        "build every implementation with a worktree source, then run check-sources",
     )
     add_command(
         "check-sources",
@@ -144,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_command("analyze", run_analyze, "find the hot loops")
     add_command("worksheet", run_worksheet, "write the classification worksheet")
     add_command("report", run_report, "write the report tables")
+    add_command(
+        "coverage",
+        run_coverage,
+        "find the hot loops that were converted to streams",
+    )
 
     return parser
 

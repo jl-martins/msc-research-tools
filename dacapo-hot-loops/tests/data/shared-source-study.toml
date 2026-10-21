@@ -1,15 +1,17 @@
 # Study where two benchmarks index the same source file
 results_dir = "results"
-jar_name = "dacapo.jar"
-jar_version = "23.11-loops"
 java_major = 21
 
 # stream_markers is required, so it must be specified.
 # No markers are needed in this case because only check-sources reads them.
 streams_markers = []
 
-[dacapo]
-mode = "existing"
+[implementations.loops]
+jar_name = "dacapo.jar"
+jar_version = "23.11-loops"
+
+[implementations.loops.source]
+kind = "existing"
 dir = "benchmarks"
 
 [profiling]

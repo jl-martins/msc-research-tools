@@ -1,13 +1,15 @@
 results_dir = "results"
-jar_name = "dacapo.jar"
-jar_version = "23.11-loops"
 java_major = 21
 
 [executables]
 java = "java"
 
-[dacapo]
-mode = "existing"
+[implementations.loops]
+jar_name = "dacapo.jar"
+jar_version = "23.11-loops"
+
+[implementations.loops.source]
+kind = "existing"
 dir = "benchmarks"
 
 [profiling]

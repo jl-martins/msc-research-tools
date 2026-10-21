@@ -39,32 +39,50 @@ class Executables(StrictModel):
     uv: ExpandedStr = "uv"
 
 
-class WorktreeConfig(StrictModel):
+# Implementation of the benchmark suite
+type Implementation = Literal["loops", "streams"]
+
+
+class ExistingSource(StrictModel):
+    """DaCapo build that already exists"""
+
+    kind: Literal["existing"]
+    # The `benchmarks` directory of the build
+    dir: ExpandedPath
+
+
+class WorktreeSource(StrictModel):
     """Git worktree that `prepare` creates and builds"""
 
-    repository: ExpandedPath
+    kind: Literal["worktree"]
     branch: str
     path: ExpandedPath
+
+
+Source = Annotated[ExistingSource | WorktreeSource, Field(discriminator="kind")]
+
+
+class ImplementationConfig(StrictModel):
+    """Jar and DaCapo build of one implementation"""
+
+    jar_name: str
+    jar_version: str
+    source: Source
+
+
+class WorktreeConfig(StrictModel):
+    """Settings shared by every worktree that `prepare` creates and builds"""
+
+    repository: ExpandedPath
     ant_java_home: ExpandedPath
     ant_dist_options: list[str] = []
     local_properties: dict[str, ExpandedStr]
 
 
 class DacapoConfig(StrictModel):
-    """Source of the DaCapo build"""
+    """DaCapo settings shared by every implementation"""
 
-    mode: Literal["existing", "worktree"]
-    dir: ExpandedPath | None = None
     worktree: WorktreeConfig | None = None
-
-    @model_validator(mode="after")
-    def require_mode_settings(self) -> Self:
-        if self.mode == "existing" and self.dir is None:
-            raise ValueError("mode 'existing' requires 'dir'")
-        elif self.mode == "worktree" and self.worktree is None:
-            raise ValueError("mode 'worktree' requires the [dacapo.worktree] table")
-        else:
-            return self
 
 
 class ProfilingConfig(StrictModel):
@@ -163,17 +181,40 @@ class StudyConfig(StrictModel):
     """Every study-specific setting"""
 
     results_dir: ExpandedPath
-    jar_name: str
-    jar_version: str
+    # Only `coverage` needs the stream-based implementation
+    implementations: dict[Implementation, ImplementationConfig]
     java_major: PositiveInt
     executables: Executables = Executables()
-    dacapo: DacapoConfig
+    dacapo: DacapoConfig = DacapoConfig()
     profiling: ProfilingConfig
     sources: SourcesConfig
     streams_markers: list[StreamsMarker]
     analysis: AnalysisConfig
     sample: SampleConfig | None = None
     benchmarks: dict[str, BenchmarkConfig] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_implementation_settings(self) -> Self:
+        uses_worktree = any(
+            isinstance(implementation.source, WorktreeSource)
+            for implementation in self.implementations.values()
+        )
+        if "loops" not in self.implementations:
+            msg = "the [implementations.loops] table is required"
+            raise ValueError(msg)
+        elif uses_worktree and self.dacapo.worktree is None:
+            msg = "a source of kind 'worktree' requires the [dacapo.worktree] table"
+            raise ValueError(msg)
+        else:
+            return self
+
+    def implementation(self, implementation: Implementation) -> ImplementationConfig:
+        implementation_config = self.implementations.get(implementation)
+        if implementation_config is None:
+            msg = f"The config has no [implementations.{implementation}] table"
+            raise HotLoopsError(msg)
+        else:
+            return implementation_config
 
 
 def load_config(path: Path) -> StudyConfig:

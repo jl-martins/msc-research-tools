@@ -6,15 +6,19 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import write_executable, write_file
+from conftest import (
+    EXISTING_SOURCE,
+    WORKTREE_SOURCE,
+    write_config_variant,
+    write_executable,
+    write_file,
+)
 
 from dacapo_hot_loops.cli import main
 
 WORKTREE_TABLE = """
 [dacapo.worktree]
 repository = "repo"
-branch = "chopin-loops"
-path = "worktree"
 ant_java_home = "/opt/temurin-8"
 ant_dist_options = ["-Dbuild.is-official=true"]
 
@@ -46,11 +50,9 @@ def git(*args: str) -> str:
 
 @pytest.fixture
 def worktree_study(study_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Study in worktree mode, with a git repository and a fake ant on PATH"""
-    config_path = study_dir / "study.toml"
-    existing_text = config_path.read_text()
-    config_text = existing_text.replace('mode = "existing"', 'mode = "worktree"')
-    config_path.write_text(config_text + WORKTREE_TABLE)
+    """Study whose loops source is a worktree, with a git repository and a fake ant"""
+    config_path = write_config_variant(study_dir, EXISTING_SOURCE, WORKTREE_SOURCE)
+    config_path.write_text(config_path.read_text() + WORKTREE_TABLE)
 
     # Isolates git from the user's and the system's config
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
@@ -69,20 +71,20 @@ def worktree_study(study_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return study_dir
 
 
-def test_existing_mode_only_checks_sources(study_dir, caplog):
+def test_existing_source_only_checks_sources(study_dir, caplog):
     caplog.set_level(logging.INFO)
     main(PREPARE_ARGS)
     assert caplog.messages[-3:] == CHECK_MESSAGES
     assert not Path("out").exists()
 
 
-def test_worktree_mode_builds(worktree_study, caplog):
+def test_worktree_source_builds(worktree_study, caplog):
     caplog.set_level(logging.INFO)
     main(PREPARE_ARGS)
     ant_call = Path("worktree/benchmarks/ant-call.txt").read_text()
     assert caplog.messages[-3:] == CHECK_MESSAGES
     assert ant_call == "/opt/temurin-8 -Dbuild.is-official=true dist\n"
-    assert Path("out/build.log").read_text() == "BUILD SUCCESSFUL\n"
+    assert Path("out/build-loops.log").read_text() == "BUILD SUCCESSFUL\n"
 
 
 def test_worktree_gets_local_properties(worktree_study):

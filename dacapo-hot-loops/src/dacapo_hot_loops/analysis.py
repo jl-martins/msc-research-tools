@@ -13,6 +13,7 @@ from typing import NamedTuple
 import polars as pl
 
 from dacapo_hot_loops import HotLoopsError
+from dacapo_hot_loops.build import resolve_benchmarks_dir
 from dacapo_hot_loops.collapsed import parse_collapsed
 from dacapo_hot_loops.config import StudyConfig
 from dacapo_hot_loops.javasrc import JavaSources, LineRange
@@ -370,12 +371,7 @@ def write_provenance(
     path.write_text(f"{text}\n", encoding="utf-8")
 
 
-def analyze(
-    config: StudyConfig,
-    config_path: Path,
-    benchmarks_dir: Path,
-    out_dir: Path,
-) -> None:
+def analyze(config: StudyConfig, config_path: Path, out_dir: Path) -> None:
     """Write every analysis table for every configured benchmark"""
     profiles_dir = out_dir / PROFILES_DIR_NAME
     profiles = {
@@ -385,8 +381,11 @@ def analyze(
     if missing:
         raise HotLoopsError(f"Missing collapsed profiles: {', '.join(missing)}")
 
+    # The profiles come from the loop-based implementation
+    benchmarks_dir = resolve_benchmarks_dir(config, "loops")
     # Read first so an unreadable jar fails before any table is written
-    jar_version = read_jar_version(benchmarks_dir / config.jar_name)
+    jar_name = config.implementation("loops").jar_name
+    jar_version = read_jar_version(benchmarks_dir / jar_name)
     analyses: list[BenchmarkAnalysis] = []
     for bm, profile in profiles.items():
         logger.info("Analyzing %s...", bm)

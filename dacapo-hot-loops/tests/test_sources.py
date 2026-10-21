@@ -1,10 +1,12 @@
 """Tests of the source index and the source checks"""
 
 import logging
+import re
+import shutil
 from pathlib import Path
 
 import pytest
-from conftest import STREAM_LINE, write_file, write_jar
+from conftest import STREAM_LINE, STREAMS_ONLY_FILE, write_file, write_jar
 
 from dacapo_hot_loops import HotLoopsError
 from dacapo_hot_loops.config import BenchmarkConfig, SourcesConfig, load_config
@@ -135,13 +137,13 @@ def test_missing_jar_fails(tmp_path):
 
 def test_loops_build_passes(study_dir):
     config = load_config(Path("study.toml"))
-    assert check_sources(config, Path("benchmarks")) == {"app": 1, "other": 1}
+    assert check_sources(config, "loops") == {"app": 1, "other": 1}
 
 
 def test_indexed_classes_are_logged_per_benchmark(study_dir, caplog):
     caplog.set_level(logging.INFO)
     config = load_config(Path("study.toml"))
-    check_sources(config, Path("benchmarks"))
+    check_sources(config, "loops")
     indexed = [m for m in caplog.messages if m.startswith("Indexed")]
     assert indexed == ["Indexed 1 class(es) of app", "Indexed 1 class(es) of other"]
 
@@ -152,32 +154,56 @@ def test_indented_stream_line_fails(study_dir):
     write_file(main_file, main_file.read_text() + indented_line)
     config = load_config(Path("study.toml"))
     with pytest.raises(HotLoopsError, match="contains"):
-        check_sources(config, Path("benchmarks"))
+        check_sources(config, "loops")
 
 
 def test_missing_line_marker_file_fails(study_dir):
     Path("benchmarks/app/src/main/java/demo/Main.java").unlink()
     config = load_config(Path("study.toml"))
     with pytest.raises(HotLoopsError, match="Main.java' does not exist"):
-        check_sources(config, Path("benchmarks"))
+        check_sources(config, "loops")
 
 
 def test_streams_only_file_fails(study_dir):
     write_file(Path("benchmarks/app/src/main/java/demo/IntStreamExtensions.java"), "")
     config = load_config(Path("study.toml"))
     with pytest.raises(HotLoopsError, match="Streams-only file"):
-        check_sources(config, Path("benchmarks"))
+        check_sources(config, "loops")
 
 
 def test_streams_jar_fails(study_dir):
     write_jar(Path("benchmarks/dacapo.jar"), "Implementation-Version: 23.11-streams\n")
     config = load_config(Path("study.toml"))
     with pytest.raises(HotLoopsError, match="Jar version is '23.11-streams'"):
-        check_sources(config, Path("benchmarks"))
+        check_sources(config, "loops")
 
 
 def test_root_without_sources_fails(study_dir):
     Path("benchmarks/other/src/demo/Other.java").unlink()
     config = load_config(Path("study.toml"))
     with pytest.raises(HotLoopsError, match="contains no .java files"):
-        check_sources(config, Path("benchmarks"))
+        check_sources(config, "loops")
+
+
+def test_streams_build_passes(streams_study):
+    config = load_config(Path("study.toml"))
+    # The streams-only file adds a class to app
+    assert check_sources(config, "streams") == {"app": 2, "other": 1}
+
+
+def test_streams_build_without_line_marker_fails(streams_study):
+    shutil.copy(
+        "benchmarks/app/src/main/java/demo/Main.java",
+        "streams-benchmarks/app/src/main/java/demo/Main.java",
+    )
+    config = load_config(Path("study.toml"))
+    msg = f"Main.java' lacks {STREAM_LINE!r}"
+    with pytest.raises(HotLoopsError, match=re.escape(msg)):
+        check_sources(config, "streams")
+
+
+def test_streams_build_without_streams_only_file_fails(streams_study):
+    STREAMS_ONLY_FILE.unlink()
+    config = load_config(Path("study.toml"))
+    with pytest.raises(HotLoopsError, match="IntStreamExtensions.java' does not exist"):
+        check_sources(config, "streams")

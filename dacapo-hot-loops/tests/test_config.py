@@ -1,19 +1,28 @@
 """Tests of the config validation"""
 
+import re
 from pathlib import Path
 
 import pytest
-from conftest import DATA_DIR, write_file
+from conftest import (
+    DATA_DIR,
+    EXISTING_SOURCE,
+    WORKTREE_SOURCE,
+    write_config_variant,
+    write_file,
+)
 
 from dacapo_hot_loops import HotLoopsError
 from dacapo_hot_loops.config import SampleConfig, load_config
 
+# Both tables of the loop-based implementation in study.toml
+LOOPS_TABLES = """
+[implementations.loops]
+jar_name = "dacapo.jar"
+jar_version = "23.11-loops"
 
-def write_config_variant(tmp_path: Path, old: str, new: str) -> Path:
-    """Write the test config with one piece of text replaced"""
-    text = (DATA_DIR / "study.toml").read_text(encoding="utf-8")
-    assert old in text
-    return write_file(tmp_path / "study.toml", text.replace(old, new, 1))
+[implementations.loops.source]
+"""
 
 
 def test_config_loads():
@@ -62,17 +71,38 @@ def test_unknown_nested_key_fails(tmp_path):
         load_config(config_path)
 
 
-def test_existing_mode_requires_dir(tmp_path):
+def test_loops_implementation_is_required(tmp_path):
+    streams_tables = LOOPS_TABLES.replace(".loops", ".streams")
+    config_path = write_config_variant(tmp_path, LOOPS_TABLES, streams_tables)
+    msg = "the [implementations.loops] table is required"
+    with pytest.raises(HotLoopsError, match=re.escape(msg)):
+        load_config(config_path)
+
+
+def test_existing_source_requires_dir(tmp_path):
     config_path = write_config_variant(tmp_path, 'dir = "benchmarks"\n', "")
-    with pytest.raises(HotLoopsError, match="requires 'dir'"):
+    with pytest.raises(HotLoopsError, match=re.escape("source.existing.dir")):
         load_config(config_path)
 
 
-def test_worktree_mode_requires_table(tmp_path):
-    worktree_mode = 'mode = "worktree"'
-    config_path = write_config_variant(tmp_path, 'mode = "existing"', worktree_mode)
-    with pytest.raises(HotLoopsError, match=r"requires the \[dacapo.worktree\] table"):
+def test_unknown_source_kind_fails(tmp_path):
+    config_path = write_config_variant(tmp_path, 'kind = "existing"', 'kind = "remote"')
+    with pytest.raises(HotLoopsError, match="'remote'"):
         load_config(config_path)
+
+
+def test_worktree_source_requires_table(tmp_path):
+    config_path = write_config_variant(tmp_path, EXISTING_SOURCE, WORKTREE_SOURCE)
+    msg = "a source of kind 'worktree' requires the [dacapo.worktree] table"
+    with pytest.raises(HotLoopsError, match=re.escape(msg)):
+        load_config(config_path)
+
+
+def test_missing_implementation_fails():
+    config = load_config(DATA_DIR / "study.toml")
+    msg = "The config has no [implementations.streams] table"
+    with pytest.raises(HotLoopsError, match=re.escape(msg)):
+        config.implementation("streams")
 
 
 def test_home_is_expanded(tmp_path):
